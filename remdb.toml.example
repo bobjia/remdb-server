@@ -1,0 +1,16 @@
+# remdb-server 配置文件示例
+
+# DDL文件路径
+ddl = "schema.ddl"
+
+# 快照文件路径
+snapshot = "remdb_snapshot.bin"
+
+# 数据库总内存大小（字节），默认100MB
+total_memory = 104857600
+
+# 是否支持低功耗模式，默认true
+low_power_mode_supported = false
+
+# 低功耗模式下的最大记录数，默认None
+low_power_max_records = 10000
