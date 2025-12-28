@@ -3,6 +3,9 @@ use rustyline::history::FileHistory;
 use rustyline::error::ReadlineError;
 use remdb::RemDb;
 use crate::sql_engine::{execute_extended_sql, format_result_set};
+use crate::snapshot_loader::{save_full_snapshot_to_dir, save_incremental_snapshot_to_dir, cleanup_old_snapshots};
+use std::time::SystemTime;
+use std::env;
 
 /// 运行交互式命令行界面
 pub fn run_cli(db: &mut RemDb) {
@@ -10,6 +13,10 @@ pub fn run_cli(db: &mut RemDb) {
     println!("Type 'help' for available commands");
     println!("Type 'exit' to quit");
     println!("{}", "=".repeat(60));
+    
+    // 初始化快照目录（默认使用当前目录下的snapshots文件夹）
+    let snapshot_dir = env::var("REMDB_SNAPSHOT_DIR").unwrap_or_else(|_| "snapshots".to_string());
+    println!("Snapshot directory: {}", snapshot_dir);
     
     let config = Config::builder()
         .history_ignore_space(true)
@@ -47,6 +54,40 @@ pub fn run_cli(db: &mut RemDb) {
                     continue;
                 }
                 
+                // 处理snapshot命令
+                if line.starts_with("snapshot ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() < 2 {
+                        eprintln!("Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'.");
+                        continue;
+                    }
+                    
+                    match parts[1] {
+                        "full" => {
+                            // 保存完整快照
+                            if let Err(err) = save_full_snapshot_to_dir(db, &snapshot_dir) {
+                                eprintln!("Error: Failed to save full snapshot: {:?}", err);
+                            } else {
+                                println!("Full snapshot saved successfully");
+                            }
+                        }
+                        "incremental" => {
+                            // 保存增量快照
+                            if let Err(err) = save_incremental_snapshot_to_dir(db, &snapshot_dir) {
+                                eprintln!("Error: Failed to save incremental snapshot: {:?}", err);
+                            } else {
+                                println!("Incremental snapshot saved successfully");
+                                // 清理旧快照，保留最新10个
+                                let _ = cleanup_old_snapshots(&snapshot_dir, 10);
+                            }
+                        }
+                        _ => {
+                            eprintln!("Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'.");
+                        }
+                    }
+                    continue;
+                }
+                
                 // 执行SQL命令
                 match execute_extended_sql(db, line) {
                     Ok(result_set) => {
@@ -78,10 +119,12 @@ pub fn run_cli(db: &mut RemDb) {
 /// 打印帮助信息
 pub fn print_help() {
     println!("Available commands:");
-    println!("  exit, :q          - Exit the console");
-    println!("  help              - Show this help message");
-    println!("  tables            - List all tables");
-    println!("  describe <table>  - Show table schema");
-    println!("  desc <table>      - Shortcut for describe");
-    println!("  select ...        - Execute SELECT query");
+    println!("  exit, :q                        - Exit the console");
+    println!("  help                            - Show this help message");
+    println!("  tables                          - List all tables");
+    println!("  describe <table>                - Show table schema");
+    println!("  desc <table>                    - Shortcut for describe");
+    println!("  select ...                      - Execute SELECT query");
+    println!("  snapshot full                   - Save a full snapshot");
+    println!("  snapshot incremental            - Save an incremental snapshot");
 }

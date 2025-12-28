@@ -5,7 +5,7 @@ mod cli;
 
 use clap::Parser;
 use crate::ddl_compiler::{compile_ddl_file, init_database};
-use crate::snapshot_loader::load_snapshot;
+use crate::snapshot_loader::load_snapshot_from_dir;
 use crate::cli::run_cli;
 use crate::sql_engine::{execute_extended_sql, format_result_set};
 use serde::Deserialize;
@@ -206,8 +206,8 @@ struct Config {
     /// DDL文件路径
     ddl: Option<String>,
     
-    /// 快照文件路径
-    snapshot: Option<String>,
+    /// 快照存储目录
+    snapshot_dir: Option<String>,
     
     /// 数据库总内存大小（字节）
     total_memory: Option<usize>,
@@ -220,6 +220,12 @@ struct Config {
     
     /// 低功耗模式下的最大记录数
     low_power_max_records: Option<usize>,
+    
+    /// 增量快照周期（秒）
+    snapshot_interval: Option<u64>,
+    
+    /// 最大增量快照数量
+    max_incremental_snapshots: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -233,9 +239,9 @@ struct Args {
     #[arg(long)]
     ddl: Option<String>,
     
-    /// 快照文件路径
+    /// 快照存储目录
     #[arg(long)]
-    snapshot: Option<String>,
+    snapshot_dir: Option<String>,
     
     /// 数据库总内存大小（字节）
     #[arg(long)]
@@ -252,6 +258,14 @@ struct Args {
     /// 低功耗模式下的最大记录数
     #[arg(long)]
     low_power_max_records: Option<usize>,
+    
+    /// 增量快照周期（秒）
+    #[arg(long)]
+    snapshot_interval: Option<u64>,
+    
+    /// 最大增量快照数量
+    #[arg(long)]
+    max_incremental_snapshots: Option<usize>,
     
     /// 非交互式模式（初始化后退出）
     #[arg(long)]
@@ -289,11 +303,13 @@ fn main() {
     
     // 合并配置：命令行参数优先级高于配置文件
     let ddl_path = args.ddl.or(config.ddl);
-    let snapshot_path = args.snapshot.or(config.snapshot);
+    let snapshot_dir = args.snapshot_dir.or(config.snapshot_dir);
     let total_memory = args.total_memory.or(config.total_memory);
     let default_max_records = args.default_max_records.or(config.default_max_records);
     let low_power_mode_supported = args.low_power_mode_supported.or(config.low_power_mode_supported);
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
+    let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
+    let max_incremental_snapshots = args.max_incremental_snapshots.or(config.max_incremental_snapshots);
     
     // 手动初始化平台
     println!("Manually initializing platform...");
@@ -371,9 +387,9 @@ fn main() {
     println!("Database initialized with {} tables", config.tables.len());
     
     // 加载快照
-    if let Some(snapshot_path) = snapshot_path {
-        println!("Loading snapshot: {}", snapshot_path);
-        if let Err(err) = snapshot_loader::load_snapshot(db, &snapshot_path) {
+    if let Some(snapshot_dir) = &snapshot_dir {
+        println!("Loading snapshot from directory: {}", snapshot_dir);
+        if let Err(err) = snapshot_loader::load_snapshot_from_dir(db, snapshot_dir) {
             eprintln!("Warning: Failed to load snapshot: {:?}", err);
         } else {
             println!("Snapshot loaded successfully");
