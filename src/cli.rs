@@ -127,4 +127,6 @@ pub fn print_help() {
     println!("  select ...                      - Execute SELECT query");
     println!("  snapshot full                   - Save a full snapshot");
     println!("  snapshot incremental            - Save an incremental snapshot");
+    println!("  stat                            - Show database monitoring statistics");
+    println!("  healthcheck                     - Check database health status");
 }

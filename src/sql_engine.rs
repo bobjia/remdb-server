@@ -1,5 +1,6 @@
 use remdb::{RemDb, RemDbError, DdlExecutor};
 use thiserror::Error;
+use crate::debug_println;
 
 #[derive(Error, Debug)]
 pub enum SqlError {
@@ -75,6 +76,16 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
         return execute_create_index(db, sql);
     }
     
+    // 处理STAT命令
+    if sql_lower == "stat" {
+        return execute_stat(db);
+    }
+    
+    // 处理HEALTHCHECK命令
+    if sql_lower == "healthcheck" {
+        return execute_healthcheck(db);
+    }
+    
     // 处理其他命令
     Err(SqlError::Unsupported)
 }
@@ -90,7 +101,7 @@ fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
     }
     
     // 添加调试信息：打印实际表数量和表定义数量
-    println!("Debug: db.config.tables.len() = {}", db.config.tables.len());
+    debug_println!("Debug: db.config.tables.len() = {}", db.config.tables.len());
     
     Ok(ResultSet {
         columns,
@@ -185,24 +196,27 @@ fn execute_describe(db: &RemDb, table_name: &str) -> std::result::Result<ResultS
 
 /// 执行SELECT命令
 fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 增加读取操作计数
+    db.metrics.inc_read_ops();
+    
     // 调试：打印要执行的SQL语句
-    println!("Debug: Executing SELECT SQL: {}", sql);
+    debug_println!("Debug: Executing SELECT SQL: {}", sql);
     
     // 调试：手动查找表名
     let sql_lower = sql.to_lowercase();
     let table_name_start = sql_lower.find("from ").map(|pos| pos + 5).unwrap_or(0);
     let table_name_end = sql_lower[table_name_start..].find(|c: char| c.is_whitespace() || c == ';').unwrap_or_else(|| sql_lower[table_name_start..].len());
     let table_name = &sql_lower[table_name_start..table_name_start + table_name_end];
-    println!("Debug: Extracted table name: {}", table_name);
+    debug_println!("Debug: Extracted table name: {}", table_name);
     
     // 调试：检查db.config.tables中是否存在该表
     let table_exists = db.config.tables.iter().any(|t| t.name == table_name);
-    println!("Debug: Table '{}' exists in config: {}", table_name, table_exists);
+    debug_println!("Debug: Table '{}' exists in config: {}", table_name, table_exists);
     
     // 调试：列出所有配置表
-    println!("Debug: All config tables:");
+    debug_println!("Debug: All config tables:");
     for (i, table) in db.config.tables.iter().enumerate() {
-        println!("Debug:   [{}] name: '{}', id: {}", i, table.name, table.id);
+        debug_println!("Debug:   [{}] name: '{}', id: {}", i, table.name, table.id);
     }
     
     // 使用RemDb的sql_query方法执行SELECT语句
@@ -451,7 +465,7 @@ fn execute_delete(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 /// 执行CREATE TABLE命令
 fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
     // 输出完整的SQL语句，用于调试
-    println!("Debug: Executing CREATE TABLE SQL: '{}'", sql);
+    debug_println!("Debug: Executing CREATE TABLE SQL: '{}'", sql);
     
     // 使用sql_query方法执行CREATE TABLE语句
     db.sql_query(sql)?;
@@ -467,7 +481,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 /// 执行CREATE INDEX命令
 fn execute_create_index(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
     // 输出完整的SQL语句，用于调试
-    println!("Debug: Executing CREATE INDEX SQL: '{}'", sql);
+    debug_println!("Debug: Executing CREATE INDEX SQL: '{}'", sql);
     
     // 使用sql_query方法执行CREATE INDEX语句
     db.sql_query(sql)?;
@@ -477,6 +491,101 @@ fn execute_create_index(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         columns: Vec::new(),
         rows: Vec::new(),
         affected_rows: 1,
+    })
+}
+
+/// 执行STAT命令
+fn execute_stat(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
+    // 获取监控指标快照
+    let metrics = db.metrics_snapshot();
+    
+    // 构建结果集
+    let columns = vec!["Metric".to_string(), "Value".to_string()];
+    let mut rows = Vec::new();
+    
+    // 添加监控指标到结果集
+    rows.push(vec!["Database Size".to_string(), format!("{} bytes", metrics.total_memory)]);
+    rows.push(vec!["Memory Usage".to_string(), format!("{} bytes", metrics.used_memory)]);
+    rows.push(vec!["Memory Usage %".to_string(), format!("{:.2}%", (metrics.used_memory as f64 / metrics.total_memory as f64) * 100.0)]);
+    rows.push(vec!["Table Count".to_string(), format!("{}", db.config.tables.len())]);
+    rows.push(vec!["Read Operations".to_string(), format!("{}", metrics.read_ops)]);
+    rows.push(vec!["Write Operations".to_string(), format!("{}", metrics.write_ops)]);
+    rows.push(vec!["Delete Operations".to_string(), format!("{}", metrics.delete_ops)]);
+    rows.push(vec!["Update Operations".to_string(), format!("{}", metrics.update_ops)]);
+    rows.push(vec!["Cache Hit Rate".to_string(), format!("{:.2}%", metrics.cache_hit_rate)]);
+    rows.push(vec!["Cache Hits".to_string(), format!("{}", metrics.cache_hits)]);
+    rows.push(vec!["Cache Misses".to_string(), format!("{}", metrics.cache_misses)]);
+    rows.push(vec!["Active Connections".to_string(), "1".to_string()]);
+    rows.push(vec!["Transactions".to_string(), format!("{}", metrics.transactions)]);
+    rows.push(vec!["Committed Transactions".to_string(), format!("{}", metrics.committed_transactions)]);
+    rows.push(vec!["Rolled Back Transactions".to_string(), format!("{}", metrics.rolled_back_transactions)]);
+    
+    Ok(ResultSet {
+        columns,
+        rows: rows.clone(),
+        affected_rows: rows.len(),
+    })
+}
+
+/// 执行HEALTHCHECK命令
+fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
+    // 执行健康检查
+    let health_result = db.health_check();
+    
+    // 构建结果集
+    let columns = vec!["Component".to_string(), "Status".to_string(), "Details".to_string()];
+    let mut rows = Vec::new();
+    
+    // 添加健康检查结果到结果集
+    rows.push(vec![
+        "Database".to_string(),
+        match health_result.status {
+            remdb::monitor::HealthStatus::Healthy => "HEALTHY".to_string(),
+            remdb::monitor::HealthStatus::Warning => "WARNING".to_string(),
+            remdb::monitor::HealthStatus::Unhealthy => "UNHEALTHY".to_string(),
+        },
+        health_result.details.to_string()
+    ]);
+    
+    // 添加内存健康检查结果
+    let metrics = health_result.metrics;
+    let memory_usage = metrics.used_memory as f64 / metrics.total_memory as f64;
+    rows.push(vec![
+        "Memory".to_string(),
+        if memory_usage > 0.9 { "UNHEALTHY".to_string() } 
+        else if memory_usage > 0.7 { "WARNING".to_string() } 
+        else { "HEALTHY".to_string() },
+        format!("Usage: {}/{} bytes ({:.2}%)", metrics.used_memory, metrics.total_memory, memory_usage * 100.0)
+    ]);
+    
+    // 添加表健康检查结果
+    rows.push(vec![
+        "Tables".to_string(),
+        "HEALTHY".to_string(),
+        format!("{} tables loaded successfully", db.config.tables.len())
+    ]);
+    
+    // 添加操作统计
+    rows.push(vec![
+        "Operations".to_string(),
+        "HEALTHY".to_string(),
+        format!("Read: {}, Write: {}, Delete: {}, Update: {}", 
+               metrics.read_ops, metrics.write_ops, metrics.delete_ops, metrics.update_ops)
+    ]);
+    
+    // 添加缓存健康检查结果
+    rows.push(vec![
+        "Cache".to_string(),
+        if metrics.cache_hit_rate < 50.0 { "WARNING".to_string() } 
+        else { "HEALTHY".to_string() },
+        format!("Hit Rate: {:.2}%, Hits: {}, Misses: {}", 
+               metrics.cache_hit_rate, metrics.cache_hits, metrics.cache_misses)
+    ]);
+    
+    Ok(ResultSet {
+        columns,
+        rows: rows.clone(),
+        affected_rows: rows.len(),
     })
 }
 

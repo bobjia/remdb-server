@@ -13,6 +13,40 @@ use std::fs;
 use std::io::{Read, Write, Seek};
 use std::time::SystemTime;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// 全局debug模式开关
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+/// 设置debug模式
+pub fn set_debug_mode(enabled: bool) {
+    DEBUG_MODE.store(enabled, Ordering::Relaxed);
+}
+
+/// 检查是否开启了debug模式
+pub fn is_debug_mode() -> bool {
+    DEBUG_MODE.load(Ordering::Relaxed)
+}
+
+/// 调试日志宏，只有在debug模式下才输出
+#[macro_export]
+macro_rules! debug_println {
+    ($($args:tt)*) => {
+        if $crate::is_debug_mode() {
+            println!($($args)*);
+        }
+    };
+}
+
+/// 调试错误日志宏，只有在debug模式下才输出
+#[macro_export]
+macro_rules! debug_eprintln {
+    ($($args:tt)*) => {
+        if $crate::is_debug_mode() {
+            eprintln!($($args)*);
+        }
+    };
+}
 
 // 定义Windows平台实现，用于非POSIX平台
 struct WindowsPlatform;
@@ -226,6 +260,9 @@ struct Config {
     
     /// 最大增量快照数量
     max_incremental_snapshots: Option<usize>,
+    
+    /// 是否开启debug模式
+    debug: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
@@ -242,6 +279,10 @@ struct Args {
     /// 快照存储目录
     #[arg(long)]
     snapshot_dir: Option<String>,
+    
+    /// 全量镜像文件路径
+    #[arg(long)]
+    full_image: Option<String>,
     
     /// 数据库总内存大小（字节）
     #[arg(long)]
@@ -266,6 +307,10 @@ struct Args {
     /// 最大增量快照数量
     #[arg(long)]
     max_incremental_snapshots: Option<usize>,
+    
+    /// 是否开启debug模式
+    #[arg(long, short)]
+    debug: bool,
     
     /// 非交互式模式（初始化后退出）
     #[arg(long)]
@@ -304,12 +349,20 @@ fn main() {
     // 合并配置：命令行参数优先级高于配置文件
     let ddl_path = args.ddl.or(config.ddl);
     let snapshot_dir = args.snapshot_dir.or(config.snapshot_dir);
+    let full_image = args.full_image.clone();
     let total_memory = args.total_memory.or(config.total_memory);
     let default_max_records = args.default_max_records.or(config.default_max_records);
     let low_power_mode_supported = args.low_power_mode_supported.or(config.low_power_mode_supported);
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
     let max_incremental_snapshots = args.max_incremental_snapshots.or(config.max_incremental_snapshots);
+    
+    // 设置debug模式：命令行参数优先级高于配置文件
+    let debug_mode = args.debug || config.debug.unwrap_or(false);
+    set_debug_mode(debug_mode);
+    if debug_mode {
+        println!("Debug mode enabled");
+    }
     
     // 手动初始化平台
     println!("Manually initializing platform...");
@@ -322,9 +375,9 @@ fn main() {
         match compile_ddl_file(&ddl_path) {
             Ok(tables) => {
                 println!("✓ Successfully compiled DDL file");
-                println!("Debug: Compiled {} tables:", tables.len());
+                debug_println!("Debug: Compiled {} tables:", tables.len());
                 for table in &tables {
-                    println!("Debug: - Table: {}", table.name);
+                    debug_println!("Debug: - Table: {}", table.name);
                 }
                 tables
             }
@@ -396,6 +449,16 @@ fn main() {
         }
     }
     
+    // 加载全量镜像文件
+    if let Some(full_image_path) = &full_image {
+        println!("Loading full image file: {}", full_image_path);
+        if let Err(err) = db.restore_snapshot(full_image_path) {
+            eprintln!("Error: Failed to load full image: {:?}", err);
+        } else {
+            println!("Full image loaded successfully");
+        }
+    }
+    
     // 启动交互式控制台
     if !args.non_interactive {
         cli::run_cli(db);
@@ -413,16 +476,29 @@ fn main() {
             }
         }
         
-        // 测试：尝试执行简单的SELECT查询
-        println!("\n--- Testing SELECT query ---");
-        let select_result = sql_engine::execute_extended_sql(db, "SELECT * FROM users");
-        match select_result {
+        // 测试：执行stat命令查看监控指标
+        println!("\n--- Testing stat command ---");
+        let stat_result = sql_engine::execute_extended_sql(db, "stat");
+        match stat_result {
             Ok(result) => {
-                println!("SELECT command output:");
+                println!("Stat command output:");
                 println!("{}", sql_engine::format_result_set(&result));
             },
             Err(err) => {
-                eprintln!("Error executing SELECT query: {:?}", err);
+                eprintln!("Error executing stat command: {:?}", err);
+            }
+        }
+        
+        // 测试：执行healthcheck命令查看健康状态
+        println!("\n--- Testing healthcheck command ---");
+        let healthcheck_result = sql_engine::execute_extended_sql(db, "healthcheck");
+        match healthcheck_result {
+            Ok(result) => {
+                println!("Healthcheck command output:");
+                println!("{}", sql_engine::format_result_set(&result));
+            },
+            Err(err) => {
+                eprintln!("Error executing healthcheck command: {:?}", err);
             }
         }
         
