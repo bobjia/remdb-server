@@ -204,6 +204,7 @@ fn create_table_def(table_id: usize, name: &'static str, columns: &[DdlColumn]) 
             not_null: !col.nullable,
             primary_key: col.primary_key,
             unique: false,
+            auto_increment: false,
         };
         
         field_defs.push(field_def);
@@ -221,7 +222,7 @@ fn create_table_def(table_id: usize, name: &'static str, columns: &[DdlColumn]) 
         secondary_index: None,
         secondary_index_type: remdb::types::IndexType::BTree,
         record_size: offset,
-        max_records: 1, // 仅使用1条记录，最小化内存使用，避免OutOfMemory错误
+        max_records: 1000, // 允许1000条记录，支持多个记录
     })
 }
 

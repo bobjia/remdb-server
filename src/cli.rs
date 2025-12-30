@@ -129,4 +129,7 @@ pub fn print_help() {
     println!("  snapshot incremental            - Save an incremental snapshot");
     println!("  stat                            - Show database monitoring statistics");
     println!("  healthcheck                     - Check database health status");
+    println!("  export ddl <file>               - Export DDL schema to file");
+    println!("  export data <table> <file>      - Export table data to CSV file");
+    println!("  export all <dir>                - Export both DDL and data to directory");
 }

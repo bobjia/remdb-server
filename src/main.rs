@@ -315,6 +315,10 @@ struct Args {
     /// 非交互式模式（初始化后退出）
     #[arg(long)]
     non_interactive: bool,
+    
+    /// 测试导出功能
+    #[arg(long)]
+    test_export: bool,
 }
 
 fn main() {
@@ -393,8 +397,8 @@ fn main() {
     // 创建默认内存分配器
     static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator = remdb::config::DefaultMemoryAllocator;
     
-    // 使用非常小的默认最大记录数，避免内存不足
-    let small_max_records = 1; // 仅使用1条记录，最小化内存使用
+    // 使用更大的默认最大记录数，允许更多记录
+    let small_max_records = 1000; // 允许1000条记录
     
     // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
     let static_tables = Box::leak(Box::new(tables));
@@ -457,6 +461,77 @@ fn main() {
         } else {
             println!("Full image loaded successfully");
         }
+    }
+    
+    // 测试导出功能
+    if args.test_export {
+        println!("\n--- Testing export functionality ---");
+        
+        // 测试导出DDL
+        println!("\n1. Testing EXPORT DDL:");
+        let ddl_result = sql_engine::execute_extended_sql(db, "export ddl exported_schema.ddl");
+        match ddl_result {
+            Ok(result) => {
+                println!("✓ Exported DDL successfully: {}", sql_engine::format_result_set(&result));
+            },
+            Err(err) => {
+                eprintln!("✗ Error exporting DDL: {:?}", err);
+            }
+        }
+        
+        // 测试导出数据
+        println!("\n2. Testing EXPORT DATA:");
+        let tables = ["users", "products", "orders"];
+        for table in tables {
+            let sql = format!("export data {} {}.csv", table, table);
+            let data_result = sql_engine::execute_extended_sql(db, &sql);
+            match data_result {
+                Ok(result) => {
+                    println!("✓ Exported {} data: {}", table, sql_engine::format_result_set(&result));
+                },
+                Err(err) => {
+                    eprintln!("✗ Error exporting {} data: {:?}", table, err);
+                }
+            }
+        }
+        
+        // 测试导出全部
+        println!("\n3. Testing EXPORT ALL:");
+        let all_result = sql_engine::execute_extended_sql(db, "export all export_all");
+        match all_result {
+            Ok(result) => {
+                println!("✓ Exported all data: {}", sql_engine::format_result_set(&result));
+            },
+            Err(err) => {
+                eprintln!("✗ Error exporting all data: {:?}", err);
+            }
+        }
+        
+        // 查看导出结果
+        println!("\n4. Export results:");
+        use std::fs;
+        if fs::metadata("exported_schema.ddl").is_ok() {
+            println!("✓ exported_schema.ddl created");
+        }
+        for table in tables {
+            let csv_file = format!("{}.csv", table);
+            if fs::metadata(&csv_file).is_ok() {
+                println!("✓ {} created", csv_file);
+            }
+        }
+        if fs::metadata("export_all").is_ok() {
+            println!("✓ export_all directory created");
+            if let Ok(entries) = fs::read_dir("export_all") {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        println!("   - {}", entry.file_name().to_string_lossy());
+                    }
+                }
+            }
+        }
+        
+        println!("\n✓ Export functionality test completed");
+        return;
     }
     
     // 启动交互式控制台

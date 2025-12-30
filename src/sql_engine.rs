@@ -56,8 +56,8 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
         return execute_select(db, sql);
     }
     
-    // 处理INSERT命令
-    if sql_lower.starts_with("insert ") {
+    // 处理INSERT命令 - 简化检查，只检查是否以"insert"开头
+    if sql_lower.starts_with("insert") {
         return execute_insert(db, sql);
     }
     
@@ -84,6 +84,33 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
     // 处理HEALTHCHECK命令
     if sql_lower == "healthcheck" {
         return execute_healthcheck(db);
+    }
+    
+    // 处理EXPORT命令
+    if sql_lower.starts_with("export ") {
+        let parts: Vec<&str> = sql_lower.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Err(SqlError::Parsing("Missing export type".to_string()));
+        }
+        
+        match parts[1] {
+            "ddl" => {
+                let output_file = parts.get(2).ok_or(SqlError::Parsing("Missing output file name".to_string()))?;
+                return execute_export_ddl(db, output_file);
+            }
+            "data" => {
+                let table_name = parts.get(2).ok_or(SqlError::Parsing("Missing table name".to_string()))?;
+                let output_file = parts.get(3).ok_or(SqlError::Parsing("Missing output file name".to_string()))?;
+                return execute_export_data(db, table_name, output_file);
+            }
+            "all" => {
+                let output_dir = parts.get(2).ok_or(SqlError::Parsing("Missing output directory".to_string()))?;
+                return execute_export_all(db, output_dir);
+            }
+            _ => {
+                return Err(SqlError::Parsing(format!("Invalid export type: {}", parts[1])));
+            }
+        }
     }
     
     // 处理其他命令
@@ -302,81 +329,8 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
 /// 执行INSERT命令
 fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // 处理INSERT语句，支持带列名的情况
-    let sql_lower = sql.trim().to_lowercase();
-    
-    // 检查是否是INSERT语句
-    if !sql_lower.starts_with("insert into ") {
-        return Err(SqlError::Parsing("Not an INSERT statement".to_string()));
-    }
-    
-    // 提取表名和剩余部分
-    let after_insert = sql_lower.trim_start_matches("insert into ");
-    
-    // 解析INSERT语句的各个部分
-    let (table_name, specified_columns, values) = parse_insert_parts(sql, after_insert)?;
-    
-    // 查找表定义
-    let table = db.config.tables.iter()
-        .find(|t| *t.name == *table_name)
-        .ok_or(SqlError::Database(remdb::RemDbError::TableNotFound))?;
-    
-    // 获取所有列名
-    let all_columns: Vec<&str> = table.fields.iter()
-        .map(|f| f.name)
-        .collect();
-    
-    // 获取所有列名的小写形式，方便后续比较
-    let all_columns_lower: Vec<String> = all_columns.iter()
-        .map(|col| col.to_lowercase())
-        .collect();
-    
-    // 构建列名到值的映射
-    let mut column_values = std::collections::HashMap::new();
-    for (col, val) in specified_columns.into_iter().zip(values.into_iter()) {
-        let col_lower = col.to_lowercase();
-        
-        // 检查列名是否存在于表中
-        if !all_columns_lower.contains(&col_lower) {
-            return Err(SqlError::Parsing(format!("Column '{}' does not exist in table '{}'", col, table_name)));
-        }
-        
-        column_values.insert(col_lower, val);
-    }
-    
-    // 构建完整的VALUES列表，按表的列顺序排列
-    let mut full_values = Vec::new();
-    for col in &all_columns {
-        if let Some(val) = column_values.get(&col.to_lowercase()) {
-            full_values.push(val.clone());
-        } else {
-            // 对于未指定的列，使用默认值
-            // 根据数据类型选择默认值
-            let field = table.fields.iter().find(|f| f.name == *col).unwrap();
-            let default_val = match field.data_type {
-                remdb::types::DataType::UInt8 | remdb::types::DataType::UInt16 |
-                remdb::types::DataType::UInt32 | remdb::types::DataType::UInt64 |
-                remdb::types::DataType::Int8 | remdb::types::DataType::Int16 |
-                remdb::types::DataType::Int32 | remdb::types::DataType::Int64 => "0",
-                remdb::types::DataType::Float32 | remdb::types::DataType::Float64 => "0.0",
-                remdb::types::DataType::Bool => "false",
-                remdb::types::DataType::Timestamp => "0",
-                remdb::types::DataType::String => "\"\"", // 空字符串
-            };
-            full_values.push(default_val.to_string());
-        }
-    }
-    
-    // 构建完整的INSERT语句
-    let full_insert_sql = format!(
-        "INSERT INTO {} VALUES ({})
-",
-        table_name,
-        full_values.join(", ")
-    );
-    
-    // 执行INSERT语句
-    db.sql_query(&full_insert_sql)?;
+    // 直接执行原始SQL语句
+    db.sql_query(sql)?;
     
     // 对于INSERT语句，假设成功插入1行
     Ok(ResultSet {
@@ -447,6 +401,209 @@ fn parse_insert_parts(sql: &str, after_insert: &str) -> std::result::Result<(Str
         // 没有指定列名，返回空列表
         Ok((table_name, Vec::new(), values))
     }
+}
+
+/// 从SQL语句中提取表名
+fn extract_table_name(sql_lower: &str) -> std::result::Result<String, SqlError> {
+    // 查找"insert into"后的表名
+    let after_insert = sql_lower.strip_prefix("insert into ")
+        .ok_or(SqlError::Parsing("Not an INSERT statement".to_string()))?;
+    
+    // 查找表名结束位置（空格或左括号）
+    let table_end = after_insert.find(|c: char| c.is_whitespace() || c == '(')
+        .unwrap_or(after_insert.len());
+    
+    Ok(after_insert[..table_end].trim().to_string())
+}
+
+/// 从SQL语句中提取指定的列名
+fn extract_columns(sql_lower: &str) -> std::result::Result<Vec<String>, SqlError> {
+    // 查找左括号位置
+    if let Some(left_paren) = sql_lower.find('(') {
+        // 查找右括号位置
+        let after_left_paren = &sql_lower[left_paren..];
+        let right_paren = after_left_paren.find(')')
+            .ok_or(SqlError::Parsing("Missing closing parenthesis for columns".to_string()))?;
+        
+        // 检查是否是列名列表（在VALUES关键字之前）
+        let columns_part = &after_left_paren[1..right_paren];
+        let after_right_paren = &after_left_paren[right_paren + 1..];
+        
+        if after_right_paren.contains("values") {
+            // 提取列名列表
+            let columns: Vec<String> = columns_part.split(',')
+                .map(|col| col.trim().to_string())
+                .collect();
+            Ok(columns)
+        } else {
+            // 不是列名列表，是VALUES部分
+            Ok(Vec::new())
+        }
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// 从SQL语句中提取值列表
+fn extract_values(sql_lower: &str) -> std::result::Result<Vec<String>, SqlError> {
+    // 查找VALUES关键字
+    let values_pos = sql_lower.find("values")
+        .ok_or(SqlError::Parsing("Missing VALUES keyword".to_string()))?;
+    
+    // 提取VALUES部分
+    let values_part = &sql_lower[values_pos + 6..].trim();
+    
+    // 查找左括号
+    let left_paren = values_part.find('(')
+        .ok_or(SqlError::Parsing("Missing opening parenthesis for values".to_string()))?;
+    
+    // 查找右括号
+    let right_paren = values_part.find(')')
+        .ok_or(SqlError::Parsing("Missing closing parenthesis for values".to_string()))?;
+    
+    // 提取值列表
+    let values_str = &values_part[left_paren + 1..right_paren];
+    let values: Vec<String> = values_str.split(',')
+        .map(|val| val.trim().to_string())
+        .collect();
+    
+    Ok(values)
+}
+
+/// 生成带有自动递增主键的新INSERT语句
+fn generate_auto_inc_sql(sql: &str) -> std::result::Result<String, SqlError> {
+    let sql_lower = sql.trim().to_lowercase();
+    
+    // 提取表名
+    let table_name = extract_table_name(&sql_lower)?;
+    
+    // 提取列名和值列表
+    let specified_columns = extract_columns(&sql_lower)?;
+    let values = extract_values(&sql_lower)?;
+    
+    // 生成随机主键值（简单实现）
+    let new_pk = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    
+    // 构建新的INSERT语句
+    let new_sql = format!(
+        "INSERT INTO {} (id, {}) VALUES ({}, {})
+",
+        table_name,
+        specified_columns.join(", "),
+        new_pk,
+        values.join(", ")
+    );
+    
+    Ok(new_sql)
+}
+
+/// 查询当前表的最大主键值
+fn get_max_primary_key(db: &mut RemDb, table_name: &str) -> std::result::Result<u64, SqlError> {
+    // 执行SELECT MAX(id)查询
+    let sql = format!("SELECT MAX(id) as max_id FROM {}", table_name);
+    let result = db.sql_query(&sql)?;
+    
+    // 解析结果
+    if let Some(row) = result.rows.first() {
+        if let Some(max_id_value) = row.values.first() {
+            // 尝试将值转换为u64
+            // 注意：这里假设主键是整数类型
+            let max_id_str = unsafe {
+                std::str::from_utf8(&max_id_value.string)
+                    .unwrap_or("0")
+                    .trim_matches(|c: char| c == '\0' || c.is_whitespace())
+            };
+            
+            // 如果结果为空，返回0
+            if max_id_str.is_empty() || max_id_str == "NULL" {
+                return Ok(0);
+            }
+            
+            // 转换为u64
+            let max_id = max_id_str.parse::<u64>()
+                .unwrap_or(0);
+            return Ok(max_id);
+        }
+    }
+    
+    Ok(0)
+}
+
+/// 构建包含自动生成主键的新INSERT语句
+fn build_insert_with_auto_pk(
+    original_sql: &str,
+    table: &remdb::types::TableDef,
+    pk_name: &str,
+    new_pk: u64,
+    specified_columns: Vec<String>,
+    values: Vec<String>
+) -> std::result::Result<String, SqlError> {
+    // 构建新的列名列表，包含主键
+    let mut new_columns = vec![pk_name.to_string()];
+    new_columns.extend(specified_columns);
+    
+    // 构建新的值列表，包含自动生成的主键
+    let mut new_values = vec![new_pk.to_string()];
+    new_values.extend(values);
+    
+    // 构建新的INSERT语句
+    let new_sql = format!(
+        "INSERT INTO {} ({}) VALUES ({})
+",
+        table.name,
+        new_columns.join(", "),
+        new_values.join(", ")
+    );
+    
+    Ok(new_sql)
+}
+
+/// 解析INSERT语句中的列名列表和值列表
+fn parse_insert_columns_and_values(after_table: &str) -> std::result::Result<(Vec<String>, Vec<String>), SqlError> {
+    let after_table = after_table.trim();
+    
+    // 查找VALUES关键字
+    let values_pos = after_table.find("values")
+        .ok_or(SqlError::Parsing("Missing VALUES keyword".to_string()))?;
+    
+    // 提取列名部分（如果有）
+    let columns_part = &after_table[..values_pos].trim();
+    let mut specified_columns = Vec::new();
+    
+    // 如果列名部分非空且以左括号开头，解析列名
+    if !columns_part.is_empty() && columns_part.starts_with('(') {
+        // 查找右括号
+        let right_paren = columns_part.find(')')
+            .ok_or(SqlError::Parsing("Missing closing parenthesis for columns".to_string()))?;
+        
+        // 提取列名列表
+        let columns_list = &columns_part[1..right_paren];
+        specified_columns = columns_list.split(',')
+            .map(|col| col.trim().to_string())
+            .collect();
+    }
+    
+    // 提取VALUES部分
+    let values_part = &after_table[values_pos + 6..].trim();
+    
+    // 查找左括号
+    let left_val_paren = values_part.find('(')
+        .ok_or(SqlError::Parsing("Missing opening parenthesis for values".to_string()))?;
+    
+    // 查找右括号
+    let right_val_paren = values_part.find(')')
+        .ok_or(SqlError::Parsing("Missing closing parenthesis for values".to_string()))?;
+    
+    // 提取值列表
+    let values_str = &values_part[left_val_paren + 1..right_val_paren];
+    let values = values_str.split(',')
+        .map(|val| val.trim().to_string())
+        .collect();
+    
+    Ok((specified_columns, values))
 }
 
 /// 执行DELETE命令
@@ -586,6 +743,131 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
         columns,
         rows: rows.clone(),
         affected_rows: rows.len(),
+    })
+}
+
+/// 执行导出DDL命令
+fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<ResultSet, SqlError> {
+    use std::fs::File;
+    use std::io::Write;
+    
+    let mut file = File::create(output_file).map_err(|e| SqlError::Parsing(format!("Failed to create file: {}", e)))?;
+    
+    // 遍历所有表定义
+    for table in db.config.tables {
+        // 生成CREATE TABLE语句
+        let mut create_table_sql = format!("CREATE TABLE {} (\n", table.name);
+        
+        // 生成列定义
+        for (i, field) in table.fields.iter().enumerate() {
+            // 转换数据类型
+            let data_type_str = match field.data_type {
+                remdb::types::DataType::UInt8 => "TINYINT UNSIGNED".to_string(),
+                remdb::types::DataType::UInt16 => "SMALLINT UNSIGNED".to_string(),
+                remdb::types::DataType::UInt32 => "INT UNSIGNED".to_string(),
+                remdb::types::DataType::UInt64 => "BIGINT UNSIGNED".to_string(),
+                remdb::types::DataType::Int8 => "TINYINT".to_string(),
+                remdb::types::DataType::Int16 => "SMALLINT".to_string(),
+                remdb::types::DataType::Int32 => "INT".to_string(),
+                remdb::types::DataType::Int64 => "BIGINT".to_string(),
+                remdb::types::DataType::Float32 => "FLOAT".to_string(),
+                remdb::types::DataType::Float64 => "DOUBLE".to_string(),
+                remdb::types::DataType::Bool => "BOOLEAN".to_string(),
+                remdb::types::DataType::Timestamp => "TIMESTAMP".to_string(),
+                remdb::types::DataType::String => format!("VARCHAR({})", field.size)
+            };
+            
+            // 生成列定义行
+            let mut column_def = format!("    {} {}", field.name, data_type_str);
+            
+            // 添加NOT NULL约束
+            if field.not_null {
+                column_def.push_str(" NOT NULL");
+            }
+            
+            // 添加PRIMARY KEY约束
+            if i == table.primary_key {
+                column_def.push_str(" PRIMARY KEY");
+            }
+            
+            // 添加逗号分隔
+            if i < table.fields.len() - 1 {
+                column_def.push(',');
+            }
+            
+            column_def.push('\n');
+            create_table_sql.push_str(&column_def);
+        }
+        
+        // 结束CREATE TABLE语句
+        create_table_sql.push_str(");\n\n");
+        
+        // 写入文件
+        file.write_all(create_table_sql.as_bytes()).map_err(|e| SqlError::Parsing(format!("Failed to write to file: {}", e)))?;
+    }
+    
+    // 返回成功结果
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: db.config.tables.len(),
+    })
+}
+
+/// 执行导出数据命令
+fn execute_export_data(db: &mut RemDb, table_name: &str, output_file: &str) -> std::result::Result<ResultSet, SqlError> {
+    use std::fs::File;
+    use std::io::Write;
+    
+    // 执行SELECT *查询获取所有数据
+    let select_sql = format!("SELECT * FROM {}", table_name);
+    let result = execute_select(db, &select_sql)?;
+    
+    // 创建输出文件
+    let mut file = File::create(output_file).map_err(|e| SqlError::Parsing(format!("Failed to create file: {}", e)))?;
+    
+    // 写入表头
+    if !result.columns.is_empty() {
+        let header_line = result.columns.join(",") + "\n";
+        file.write_all(header_line.as_bytes()).map_err(|e| SqlError::Parsing(format!("Failed to write header: {}", e)))?;
+    }
+    
+    // 写入数据行
+    for row in &result.rows {
+        let data_line = row.join(",") + "\n";
+        file.write_all(data_line.as_bytes()).map_err(|e| SqlError::Parsing(format!("Failed to write data: {}", e)))?;
+    }
+    
+    // 返回成功结果
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: result.affected_rows,
+    })
+}
+
+/// 执行导出全部内容命令
+fn execute_export_all(db: &mut RemDb, output_dir: &str) -> std::result::Result<ResultSet, SqlError> {
+    use std::fs;
+    
+    // 创建输出目录
+    fs::create_dir_all(output_dir).map_err(|e| SqlError::Parsing(format!("Failed to create directory: {}", e)))?;
+    
+    // 导出DDL
+    let ddl_file = format!("{}/schema.ddl", output_dir);
+    execute_export_ddl(db, &ddl_file)?;
+    
+    // 导出每个表的数据
+    for table in db.config.tables {
+        let data_file = format!("{}/{}.csv", output_dir, table.name);
+        execute_export_data(db, table.name, &data_file)?;
+    }
+    
+    // 返回成功结果
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: db.config.tables.len(),
     })
 }
 
