@@ -2,12 +2,16 @@ mod ddl_compiler;
 mod snapshot_loader;
 mod sql_engine;
 mod cli;
+mod jdbc_server;
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use clap::Parser;
 use crate::ddl_compiler::{compile_ddl_file, init_database};
 use crate::snapshot_loader::load_snapshot_from_dir;
 use crate::cli::run_cli;
 use crate::sql_engine::{execute_extended_sql, format_result_set};
+use crate::jdbc_server::JdbcServer;
 use serde::Deserialize;
 use std::fs;
 use std::io::{Read, Write, Seek};
@@ -263,6 +267,12 @@ struct Config {
     
     /// 是否开启debug模式
     debug: Option<bool>,
+    
+    /// JDBC监听端口
+    jdbc_port: Option<u16>,
+    
+    /// 最大允许的并发客户端连接数
+    max_connections: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -319,9 +329,18 @@ struct Args {
     /// 测试导出功能
     #[arg(long)]
     test_export: bool,
+    
+    /// JDBC监听端口
+    #[arg(long)]
+    jdbc_port: Option<u16>,
+    
+    /// 最大允许的并发客户端连接数
+    #[arg(long)]
+    max_connections: Option<usize>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     
     println!("remdb-server v0.1.0");
@@ -360,6 +379,8 @@ fn main() {
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
     let max_incremental_snapshots = args.max_incremental_snapshots.or(config.max_incremental_snapshots);
+    let jdbc_port = args.jdbc_port.or(config.jdbc_port);
+    let max_connections = args.max_connections.or(config.max_connections);
     
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
@@ -431,7 +452,7 @@ fn main() {
     }
     
     // 使用remdb库提供的init_global_db函数初始化数据库，这个函数会从配置中创建表
-    let db = match unsafe {
+    let mut db = match unsafe {
         remdb::init_global_db(config)
     } {
         Ok(db) => db,
@@ -446,7 +467,7 @@ fn main() {
     // 加载快照
     if let Some(snapshot_dir) = &snapshot_dir {
         println!("Loading snapshot from directory: {}", snapshot_dir);
-        if let Err(err) = snapshot_loader::load_snapshot_from_dir(db, snapshot_dir) {
+        if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
             eprintln!("Warning: Failed to load snapshot: {:?}", err);
         } else {
             println!("Snapshot loaded successfully");
@@ -469,7 +490,7 @@ fn main() {
         
         // 测试导出DDL
         println!("\n1. Testing EXPORT DDL:");
-        let ddl_result = sql_engine::execute_extended_sql(db, "export ddl exported_schema.ddl");
+        let ddl_result = sql_engine::execute_extended_sql(&mut db, "export ddl exported_schema.ddl");
         match ddl_result {
             Ok(result) => {
                 println!("✓ Exported DDL successfully: {}", sql_engine::format_result_set(&result));
@@ -484,7 +505,7 @@ fn main() {
         let tables = ["users", "products", "orders"];
         for table in tables {
             let sql = format!("export data {} {}.csv", table, table);
-            let data_result = sql_engine::execute_extended_sql(db, &sql);
+            let data_result = sql_engine::execute_extended_sql(&mut db, &sql);
             match data_result {
                 Ok(result) => {
                     println!("✓ Exported {} data: {}", table, sql_engine::format_result_set(&result));
@@ -497,7 +518,7 @@ fn main() {
         
         // 测试导出全部
         println!("\n3. Testing EXPORT ALL:");
-        let all_result = sql_engine::execute_extended_sql(db, "export all export_all");
+        let all_result = sql_engine::execute_extended_sql(&mut db, "export all export_all");
         match all_result {
             Ok(result) => {
                 println!("✓ Exported all data: {}", sql_engine::format_result_set(&result));
@@ -534,13 +555,33 @@ fn main() {
         return;
     }
     
+    // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
+    let db_arc = Arc::new(Mutex::new(db));
+    
+    // 启动JDBC服务器（如果配置了JDBC端口）
+    if let Some(jdbc_port) = jdbc_port {
+        let max_conns = max_connections.unwrap_or(100); // 默认最大连接数为100
+        let jdbc_server = JdbcServer::new(db_arc.clone(), jdbc_port, max_conns);
+        
+        println!("Starting JDBC server on port {} with max connections {}", jdbc_port, max_conns);
+        
+        // 在后台启动JDBC服务器
+        tokio::spawn(async move {
+            if let Err(e) = jdbc_server.start().await {
+                eprintln!("Error: JDBC server failed to start: {:?}", e);
+            }
+        });
+    }
+    
     // 启动交互式控制台
     if !args.non_interactive {
-        cli::run_cli(db);
+        let mut db_lock = db_arc.lock().await;
+        cli::run_cli(&mut db_lock);
     } else {
         // 测试：直接执行tables命令查看表列表
         println!("\n--- Testing database tables ---");
-        let tables_result = sql_engine::execute_extended_sql(db, "tables");
+        let mut db_lock = db_arc.lock().await;
+        let tables_result = sql_engine::execute_extended_sql(&mut db_lock, "tables");
         match tables_result {
             Ok(result) => {
                 println!("Tables command output:");
@@ -553,7 +594,8 @@ fn main() {
         
         // 测试：执行stat命令查看监控指标
         println!("\n--- Testing stat command ---");
-        let stat_result = sql_engine::execute_extended_sql(db, "stat");
+        let mut db_lock = db_arc.lock().await;
+        let stat_result = sql_engine::execute_extended_sql(&mut db_lock, "stat");
         match stat_result {
             Ok(result) => {
                 println!("Stat command output:");
@@ -566,7 +608,8 @@ fn main() {
         
         // 测试：执行healthcheck命令查看健康状态
         println!("\n--- Testing healthcheck command ---");
-        let healthcheck_result = sql_engine::execute_extended_sql(db, "healthcheck");
+        let mut db_lock = db_arc.lock().await;
+        let healthcheck_result = sql_engine::execute_extended_sql(&mut db_lock, "healthcheck");
         match healthcheck_result {
             Ok(result) => {
                 println!("Healthcheck command output:");
