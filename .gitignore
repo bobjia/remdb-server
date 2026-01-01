@@ -1,3 +1,5 @@
 /target
 .trae/*
 snapshots/*
+*.log
+remdb_history.txt

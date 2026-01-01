@@ -739,6 +739,27 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
                metrics.cache_hit_rate, metrics.cache_hits, metrics.cache_misses)
     ]);
     
+    // 添加JDBC服务状态检查
+    rows.push(vec![
+        "JDBC Server".to_string(),
+        "UNKNOWN".to_string(),
+        "JDBC服务状态通过外部配置判断".to_string()
+    ]);
+    
+    // 添加PubSub服务状态检查
+    rows.push(vec![
+        "PubSub Server".to_string(),
+        "UNKNOWN".to_string(),
+        "PubSub服务状态通过外部配置判断".to_string()
+    ]);
+    
+    // 添加HA服务状态检查
+    rows.push(vec![
+        "HA Service".to_string(),
+        "UNKNOWN".to_string(),
+        "HA服务状态通过外部配置判断".to_string()
+    ]);
+    
     Ok(ResultSet {
         columns,
         rows: rows.clone(),

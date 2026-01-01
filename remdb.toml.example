@@ -4,7 +4,7 @@
 ddl = "schema.ddl"
 
 # 快照文件路径
-snapshot = "remdb_snapshot.bin"
+snapshot = "./snapshot"
 
 # 数据库总内存大小（字节），默认100MB
 total_memory = 104857600
@@ -15,10 +15,18 @@ low_power_mode_supported = false
 # 低功耗模式下的最大记录数，默认None
 low_power_max_records = 10000
 
+# JDBC服务配置
+# 是否启用JDBC服务
+jdbc_enabled = true
+# JDBC监听端口，默认6666
+jdbc_port = 6666
+# 最大允许的并发jdbc客户端连接数，默认5
+max_connections = 5
+
 # 通过配置文件启用PubSub功能
 [pubsub]
 enabled = true
-udp_bind_address = "0.0.0.0:9000"
+udp_bind_address = "0.0.0.0:6667"
 heartbeat_interval = 2000
 retransmission_timeout = 1000
 max_retransmissions = 5
@@ -47,4 +55,4 @@ sync_timeout_ms = 2000
 master_address = "127.0.0.1"
 
 # 主节点端口（仅slave节点需要）
-master_port = 3306
+master_port = 6668

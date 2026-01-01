@@ -3,8 +3,6 @@ mod snapshot_loader;
 mod sql_engine;
 mod cli;
 mod jdbc_server;
-mod udp_transport;
-mod pubsub_server;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -301,6 +299,9 @@ struct Config {
     /// JDBC监听端口
     jdbc_port: Option<u16>,
     
+    /// 是否启用JDBC服务
+    jdbc_enabled: Option<bool>,
+    
     /// 最大允许的并发jdbc客户端连接数
     max_connections: Option<usize>,
     
@@ -388,6 +389,10 @@ struct Args {
     /// JDBC监听端口
     #[arg(long)]
     jdbc_port: Option<u16>,
+    
+    /// 是否启用JDBC服务
+    #[arg(long)]
+    jdbc_enabled: Option<bool>,
     
     /// 最大允许的并发jdbc客户端连接数
     #[arg(long)]
@@ -487,6 +492,7 @@ async fn main() {
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
     let max_incremental_snapshots = args.max_incremental_snapshots.or(config.max_incremental_snapshots);
     let jdbc_port = args.jdbc_port.or(config.jdbc_port);
+    let jdbc_enabled = args.jdbc_enabled.or(config.jdbc_enabled);
     let max_connections = args.max_connections.or(config.max_connections);
     
     // 合并pubsub配置
@@ -719,12 +725,15 @@ async fn main() {
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
     let db_arc = Arc::new(Mutex::new(db));
     
-    // 启动JDBC服务器（如果配置了JDBC端口）
-    if let Some(jdbc_port) = jdbc_port {
+    // 启动JDBC服务器（如果启用了JDBC服务且配置了端口，或者没有明确禁用）
+    let should_start_jdbc = jdbc_enabled.unwrap_or(jdbc_port.is_some());
+    if should_start_jdbc {
+        // 如果配置了端口，则使用配置的端口，否则使用默认端口5432
+        let actual_jdbc_port = jdbc_port.unwrap_or(5432);
         let max_conns = max_connections.unwrap_or(100); // 默认最大连接数为100
-        let jdbc_server = JdbcServer::new(db_arc.clone(), jdbc_port, max_conns);
+        let jdbc_server = JdbcServer::new(db_arc.clone(), actual_jdbc_port, max_conns);
         
-        println!("Starting JDBC server on port {} with max connections {}", jdbc_port, max_conns);
+        println!("Starting JDBC server on port {} with max connections {}", actual_jdbc_port, max_conns);
         
         // 在后台启动JDBC服务器
         tokio::spawn(async move {
@@ -732,44 +741,46 @@ async fn main() {
                 eprintln!("Error: JDBC server failed to start: {:?}", e);
             }
         });
+    } else {
+        println!("JDBC server is disabled");
     }
     
-    // 创建并启动PubSub服务器
-    let mut pubsub_server = {
-        use crate::pubsub_server::{PubSubServer, PubSubServerConfig};
-        use crate::udp_transport::UdpTransportConfig;
+    // 初始化并启动PubSub系统（如果启用）
+    if pubsub_enabled.unwrap_or(false) {
+        use remdb::pubsub::{PubSubConfig, UdpMode, init as pubsub_init};
         
-        // 创建UDP传输配置
-        let mut udp_config = UdpTransportConfig::default();
-        if let Some(bind_addr) = pubsub_udp_bind {
-            udp_config.bind_address = bind_addr;
-        }
-        if let Some(heartbeat) = pubsub_heartbeat {
-            udp_config.heartbeat_interval = std::time::Duration::from_millis(heartbeat as u64);
-        }
-        if let Some(retrans_timeout) = pubsub_retrans_timeout {
-            udp_config.retransmission_timeout = std::time::Duration::from_millis(retrans_timeout as u64);
-        }
-        if let Some(max_retrans) = pubsub_max_retrans {
-            udp_config.max_retransmissions = max_retrans;
+        // 从UDP绑定地址中提取端口号，默认使用9000
+        let mut pubsub_port = 9000;
+        if let Some(bind_addr) = &pubsub_udp_bind {
+            if let Some(addr) = bind_addr.split(':').last() {
+                if let Ok(port) = addr.parse::<u16>() {
+                    pubsub_port = port;
+                }
+            }
         }
         
-        // 创建PubSub服务器配置
-        let pubsub_config = PubSubServerConfig {
-            enabled: pubsub_enabled.unwrap_or(false),
-            udp_config,
+        // 创建PubSub配置
+        let pubsub_config = PubSubConfig {
+            udp_mode: UdpMode::Unicast,
+            multicast_addr: None,
+            port: pubsub_port,
+            max_topics: 32,
+            max_subscribers_per_topic: 16,
+            buffer_size: 4096,
+            enable_nack: true,
+            retransmit_timeout: std::time::Duration::from_millis(pubsub_retrans_timeout.unwrap_or(500) as u64),
+            max_retransmits: pubsub_max_retrans.unwrap_or(3) as usize,
+            heartbeat_interval: std::time::Duration::from_millis(pubsub_heartbeat.unwrap_or(1000) as u64),
+            frame_pool_size: 128,
         };
         
-        // 创建PubSub服务器
-        let mut server = PubSubServer::new(pubsub_config);
-        
-        // 启动PubSub服务器
-        if let Err(err) = server.start() {
-            eprintln!("Warning: Failed to start PubSub server: {}", err);
+        // 初始化PubSub系统
+        if let Err(err) = pubsub_init(pubsub_config) {
+            eprintln!("Warning: Failed to initialize PubSub system: {:?}", err);
+        } else {
+            println!("PubSub system initialized successfully on port {}", pubsub_port);
         }
-        
-        server
-    };
+    }
     
     // 启动交互式控制台
     if !args.non_interactive {
@@ -821,7 +832,10 @@ async fn main() {
         println!("✓ Database initialized successfully in non-interactive mode");
     }
     
-    // 程序退出前停止PubSub服务器
-    println!("Stopping PubSub server...");
-    pubsub_server.stop();
+    // 程序退出前关闭PubSub系统
+    println!("Stopping PubSub system...");
+    use remdb::pubsub::shutdown as pubsub_shutdown;
+    if let Err(err) = pubsub_shutdown() {
+        eprintln!("Warning: Failed to shutdown PubSub system: {:?}", err);
+    }
 }

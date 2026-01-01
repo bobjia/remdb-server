@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-remdb = { version = "0.1.17", default-features = true }
-remdb-macros = "0.1.17"
+remdb = { version = "0.1.18", default-features = true }
+remdb-macros = "0.1.18"
 rustyline = "12.0.0"
 rustyline-derive = "0.11.0"
 clap = { version = "4.5.0", features = ["derive"] }
