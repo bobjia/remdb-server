@@ -236,6 +236,34 @@ impl remdb::platform::Platform for WindowsPlatform {
 // 创建静态平台实例
 static WINDOWS_PLATFORM: WindowsPlatform = WindowsPlatform;
 
+/// 高可用配置
+#[derive(Deserialize, Debug, Default)]
+struct HaConfig {
+    /// 是否启用高可用功能
+    enabled: Option<bool>,
+    
+    /// 节点角色（master/slave）
+    role: Option<String>,
+    
+    /// 复制模式（async/sync）
+    replication_mode: Option<String>,
+    
+    /// 心跳间隔（毫秒）
+    heartbeat_interval: Option<u64>,
+    
+    /// 故障检测时间（毫秒）
+    failure_detection_ms: Option<u64>,
+    
+    /// 同步超时时间（毫秒）
+    sync_timeout_ms: Option<u64>,
+    
+    /// 主节点地址（仅slave节点需要）
+    master_address: Option<String>,
+    
+    /// 主节点端口（仅slave节点需要）
+    master_port: Option<u16>,
+}
+
 /// 配置文件结构体
 #[derive(Deserialize, Debug, Default)]
 struct Config {
@@ -268,6 +296,9 @@ struct Config {
     
     /// pubsub配置
     pubsub: Option<PubSubConfig>,
+    
+    /// 高可用配置
+    ha: Option<HaConfig>,
 }
 
 /// pubsub配置
@@ -363,6 +394,38 @@ struct Args {
     /// 最大重传次数
     #[arg(long)]
     pubsub_max_retrans: Option<u32>,
+    
+    /// 是否启用高可用功能
+    #[arg(long)]
+    ha_enabled: Option<bool>,
+    
+    /// 节点角色（master/slave）
+    #[arg(long)]
+    ha_role: Option<String>,
+    
+    /// 复制模式（async/sync）
+    #[arg(long)]
+    ha_replication_mode: Option<String>,
+    
+    /// 心跳间隔（毫秒）
+    #[arg(long)]
+    ha_heartbeat_interval: Option<u64>,
+    
+    /// 故障检测时间（毫秒）
+    #[arg(long)]
+    ha_failure_detection_ms: Option<u64>,
+    
+    /// 同步超时时间（毫秒）
+    #[arg(long)]
+    ha_sync_timeout_ms: Option<u64>,
+    
+    /// 主节点地址（仅slave节点需要）
+    #[arg(long)]
+    ha_master_address: Option<String>,
+    
+    /// 主节点端口（仅slave节点需要）
+    #[arg(long)]
+    ha_master_port: Option<u16>,
 }
 
 fn main() {
@@ -412,6 +475,16 @@ fn main() {
     let pubsub_retrans_timeout = args.pubsub_retrans_timeout.or(config.pubsub.as_ref().and_then(|p| p.retransmission_timeout));
     let pubsub_max_retrans = args.pubsub_max_retrans.or(config.pubsub.as_ref().and_then(|p| p.max_retransmissions));
     
+    // 合并高可用配置
+    let ha_enabled = args.ha_enabled.or(config.ha.as_ref().and_then(|h| h.enabled));
+    let ha_role = args.ha_role.or(config.ha.as_ref().and_then(|h| h.role.clone()));
+    let ha_replication_mode = args.ha_replication_mode.or(config.ha.as_ref().and_then(|h| h.replication_mode.clone()));
+    let ha_heartbeat_interval = args.ha_heartbeat_interval.or(config.ha.as_ref().and_then(|h| h.heartbeat_interval));
+    let ha_failure_detection_ms = args.ha_failure_detection_ms.or(config.ha.as_ref().and_then(|h| h.failure_detection_ms));
+    let ha_sync_timeout_ms = args.ha_sync_timeout_ms.or(config.ha.as_ref().and_then(|h| h.sync_timeout_ms));
+    let ha_master_address = args.ha_master_address.or(config.ha.as_ref().and_then(|h| h.master_address.clone()));
+    let ha_master_port = args.ha_master_port.or(config.ha.as_ref().and_then(|h| h.master_port));
+    
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
     set_debug_mode(debug_mode);
@@ -454,6 +527,30 @@ fn main() {
     // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
     let static_tables = Box::leak(Box::new(tables));
     
+    // 解析高可用配置
+    let ha_enabled = ha_enabled.unwrap_or(false);
+    
+    // 根据配置设置节点角色
+    let ha_role = if !ha_enabled {
+        remdb::config::HARole::Master // 未启用高可用时默认为独立master
+    } else {
+        match ha_role.as_deref() {
+            Some("slave") | Some("Slave") => remdb::config::HARole::Slave,
+            _ => remdb::config::HARole::Master,
+        }
+    };
+    
+    // 根据配置设置复制模式
+    let replication_mode = match ha_replication_mode.as_deref() {
+        Some("sync") | Some("Sync") => remdb::config::ReplicationMode::Sync,
+        _ => remdb::config::ReplicationMode::Async,
+    };
+    
+    // 处理主节点地址，转换为&'static str
+    let master_address = ha_master_address.map(|addr| {
+        Box::leak(addr.into_boxed_str()) as &'static str
+    });
+    
     // 创建配置
     let config = Box::leak(Box::new(remdb::config::DbConfig {
         tables: static_tables,
@@ -470,13 +567,13 @@ fn main() {
         log_prealloc_size: 4 * 1024 * 1024, // 默认4MB
         log_segment_size: 16 * 1024 * 1024, // 默认16MB
         retained_checkpoints: 3, // 默认保留3个检查点
-        ha_role: remdb::config::HARole::Master, // 默认主节点
-        replication_mode: remdb::config::ReplicationMode::Async, // 默认异步复制
-        heartbeat_interval_ms: 1000, // 默认1秒心跳
-        failure_detection_ms: 5000, // 默认5秒故障检测
-        sync_timeout_ms: 2000, // 默认2秒同步超时
-        master_address: None, // 默认无主节点地址
-        master_port: None, // 默认无主节点端口
+        ha_role,
+        replication_mode,
+        heartbeat_interval_ms: ha_heartbeat_interval.unwrap_or(1000), // 默认1秒心跳
+        failure_detection_ms: ha_failure_detection_ms.unwrap_or(5000), // 默认5秒故障检测
+        sync_timeout_ms: ha_sync_timeout_ms.unwrap_or(2000), // 默认2秒同步超时
+        master_address,
+        master_port: ha_master_port,
     }));
     
     // 初始化全局内存分配器，这是关键的一步！

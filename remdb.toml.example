@@ -22,3 +22,29 @@ udp_bind_address = "0.0.0.0:9000"
 heartbeat_interval = 2000
 retransmission_timeout = 1000
 max_retransmissions = 5
+
+# 高可用配置示例
+[ha]
+# 是否启用高可用功能
+enabled = false
+
+# 节点角色（master/slave）
+role = "master"
+
+# 复制模式（async/sync）
+replication_mode = "async"
+
+# 心跳间隔（毫秒）
+heartbeat_interval = 1000
+
+# 故障检测时间（毫秒）
+failure_detection_ms = 5000
+
+# 同步超时时间（毫秒）
+sync_timeout_ms = 2000
+
+# 主节点地址（仅slave节点需要）
+master_address = "127.0.0.1"
+
+# 主节点端口（仅slave节点需要）
+master_port = 3306
