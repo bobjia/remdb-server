@@ -241,10 +241,23 @@ pub fn init_database(tables: Vec<TableDef>, total_memory: Option<usize>, default
     let config = Box::leak(Box::new(remdb::config::DbConfig {
         tables: static_tables,
         total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
-        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
         low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
         low_power_max_records: Some(small_max_records), // 使用非常小的默认值
+        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
         memory_allocator: unsafe { &*(&raw const DEFAULT_ALLOCATOR as *const _) as &'static dyn remdb::config::MemoryAllocator },
+        log_mode: remdb::config::LogMode::Async, // 默认异步日志模式
+        checkpoint_interval_ms: 30000, // 默认30秒
+        log_file_size_limit: 16 * 1024 * 1024, // 默认16MB
+        log_prealloc_size: 4 * 1024 * 1024, // 默认4MB
+        log_segment_size: 16 * 1024 * 1024, // 默认16MB
+        retained_checkpoints: 3, // 默认保留3个检查点
+        ha_role: remdb::config::HARole::Master, // 默认主节点
+        replication_mode: remdb::config::ReplicationMode::Async, // 默认异步复制
+        heartbeat_interval_ms: 1000, // 默认1秒心跳
+        failure_detection_ms: 5000, // 默认5秒故障检测
+        sync_timeout_ms: 2000, // 默认2秒同步超时
+        master_address: None, // 默认无主节点地址
+        master_port: None, // 默认无主节点端口
     }));
     
     // 创建数据库实例

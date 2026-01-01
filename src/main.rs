@@ -2,6 +2,8 @@ mod ddl_compiler;
 mod snapshot_loader;
 mod sql_engine;
 mod cli;
+mod udp_transport;
+mod pubsub_server;
 
 use clap::Parser;
 use crate::ddl_compiler::{compile_ddl_file, init_database};
@@ -263,6 +265,28 @@ struct Config {
     
     /// 是否开启debug模式
     debug: Option<bool>,
+    
+    /// pubsub配置
+    pubsub: Option<PubSubConfig>,
+}
+
+/// pubsub配置
+#[derive(Deserialize, Debug, Default)]
+struct PubSubConfig {
+    /// 是否启用pubsub功能
+    enabled: Option<bool>,
+    
+    /// UDP绑定地址
+    udp_bind_address: Option<String>,
+    
+    /// 心跳间隔（毫秒）
+    heartbeat_interval: Option<u32>,
+    
+    /// 重传超时（毫秒）
+    retransmission_timeout: Option<u32>,
+    
+    /// 最大重传次数
+    max_retransmissions: Option<u32>,
 }
 
 #[derive(Parser, Debug)]
@@ -319,6 +343,26 @@ struct Args {
     /// 测试导出功能
     #[arg(long)]
     test_export: bool,
+    
+    /// 是否启用pubsub功能
+    #[arg(long)]
+    pubsub_enabled: Option<bool>,
+    
+    /// UDP绑定地址
+    #[arg(long)]
+    pubsub_udp_bind: Option<String>,
+    
+    /// 心跳间隔（毫秒）
+    #[arg(long)]
+    pubsub_heartbeat: Option<u32>,
+    
+    /// 重传超时（毫秒）
+    #[arg(long)]
+    pubsub_retrans_timeout: Option<u32>,
+    
+    /// 最大重传次数
+    #[arg(long)]
+    pubsub_max_retrans: Option<u32>,
 }
 
 fn main() {
@@ -360,6 +404,13 @@ fn main() {
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
     let max_incremental_snapshots = args.max_incremental_snapshots.or(config.max_incremental_snapshots);
+    
+    // 合并pubsub配置
+    let pubsub_enabled = args.pubsub_enabled.or(config.pubsub.as_ref().and_then(|p| p.enabled));
+    let pubsub_udp_bind = args.pubsub_udp_bind.or(config.pubsub.as_ref().and_then(|p| p.udp_bind_address.clone()));
+    let pubsub_heartbeat = args.pubsub_heartbeat.or(config.pubsub.as_ref().and_then(|p| p.heartbeat_interval));
+    let pubsub_retrans_timeout = args.pubsub_retrans_timeout.or(config.pubsub.as_ref().and_then(|p| p.retransmission_timeout));
+    let pubsub_max_retrans = args.pubsub_max_retrans.or(config.pubsub.as_ref().and_then(|p| p.max_retransmissions));
     
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
@@ -407,12 +458,25 @@ fn main() {
     let config = Box::leak(Box::new(remdb::config::DbConfig {
         tables: static_tables,
         total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
-        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
         low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
         low_power_max_records: Some(low_power_max_records.unwrap_or(100)), // 默认100条记录
+        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
         memory_allocator: unsafe {
             &*(&raw const DEFAULT_ALLOCATOR as *const _) as &'static dyn remdb::config::MemoryAllocator
         },
+        log_mode: remdb::config::LogMode::Async, // 默认异步日志模式
+        checkpoint_interval_ms: 30000, // 默认30秒
+        log_file_size_limit: 16 * 1024 * 1024, // 默认16MB
+        log_prealloc_size: 4 * 1024 * 1024, // 默认4MB
+        log_segment_size: 16 * 1024 * 1024, // 默认16MB
+        retained_checkpoints: 3, // 默认保留3个检查点
+        ha_role: remdb::config::HARole::Master, // 默认主节点
+        replication_mode: remdb::config::ReplicationMode::Async, // 默认异步复制
+        heartbeat_interval_ms: 1000, // 默认1秒心跳
+        failure_detection_ms: 5000, // 默认5秒故障检测
+        sync_timeout_ms: 2000, // 默认2秒同步超时
+        master_address: None, // 默认无主节点地址
+        master_port: None, // 默认无主节点端口
     }));
     
     // 初始化全局内存分配器，这是关键的一步！
@@ -534,6 +598,43 @@ fn main() {
         return;
     }
     
+    // 创建并启动PubSub服务器
+    let mut pubsub_server = {
+        use crate::pubsub_server::{PubSubServer, PubSubServerConfig};
+        use crate::udp_transport::UdpTransportConfig;
+        
+        // 创建UDP传输配置
+        let mut udp_config = UdpTransportConfig::default();
+        if let Some(bind_addr) = pubsub_udp_bind {
+            udp_config.bind_address = bind_addr;
+        }
+        if let Some(heartbeat) = pubsub_heartbeat {
+            udp_config.heartbeat_interval = std::time::Duration::from_millis(heartbeat as u64);
+        }
+        if let Some(retrans_timeout) = pubsub_retrans_timeout {
+            udp_config.retransmission_timeout = std::time::Duration::from_millis(retrans_timeout as u64);
+        }
+        if let Some(max_retrans) = pubsub_max_retrans {
+            udp_config.max_retransmissions = max_retrans;
+        }
+        
+        // 创建PubSub服务器配置
+        let pubsub_config = PubSubServerConfig {
+            enabled: pubsub_enabled.unwrap_or(false),
+            udp_config,
+        };
+        
+        // 创建PubSub服务器
+        let mut server = PubSubServer::new(pubsub_config);
+        
+        // 启动PubSub服务器
+        if let Err(err) = server.start() {
+            eprintln!("Warning: Failed to start PubSub server: {}", err);
+        }
+        
+        server
+    };
+    
     // 启动交互式控制台
     if !args.non_interactive {
         cli::run_cli(db);
@@ -577,6 +678,10 @@ fn main() {
             }
         }
         
-        println!("\n✓ Database initialized successfully in non-interactive mode");
+        println!("✓ Database initialized successfully in non-interactive mode");
     }
+    
+    // 程序退出前停止PubSub服务器
+    println!("Stopping PubSub server...");
+    pubsub_server.stop();
 }

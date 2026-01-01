@@ -14,3 +14,11 @@ low_power_mode_supported = false
 
 # 低功耗模式下的最大记录数，默认None
 low_power_max_records = 10000
+
+# 通过配置文件启用PubSub功能
+[pubsub]
+enabled = true
+udp_bind_address = "0.0.0.0:9000"
+heartbeat_interval = 2000
+retransmission_timeout = 1000
+max_retransmissions = 5
