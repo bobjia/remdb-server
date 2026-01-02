@@ -336,10 +336,21 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
 /// 执行INSERT命令
 fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // TODO: Implement proper INSERT handling
-    // Currently, the db.sql_query() method appears to hang on INSERT statements
-    // This is a temporary fix to prevent the server from hanging
-    Err(SqlError::Unsupported)
+    // 增加写操作计数
+    db.metrics.inc_write_ops();
+    
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing INSERT SQL: {}", sql);
+    
+    // 直接使用RemDb的sql_query方法执行INSERT语句，避免手动解析和调用可能有问题的insert_record方法
+    let result = db.sql_query(sql)?;
+    
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: 1, // 假设插入成功，影响1行
+    })
 }
 
 /// 解析INSERT语句的各个部分：表名、指定的列名、值
@@ -615,63 +626,185 @@ fn parse_insert_columns_and_values(after_table: &str) -> std::result::Result<(Ve
 
 /// 执行DELETE命令
 fn execute_delete(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // 使用RemDb的sql_query方法执行DELETE语句
-    db.sql_query(sql)?;
+    // 增加删除操作计数
+    db.metrics.inc_delete_ops();
     
-    // 对于DELETE语句，假设成功删除1行
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing DELETE SQL: {}", sql);
+    
+    // 直接使用RemDb的sql_query方法执行DELETE语句，避免手动解析和调用可能有问题的delete_record方法
+    let result = db.sql_query(sql)?;
+    
+    // 构造结果集
     Ok(ResultSet {
         columns: Vec::new(),
         rows: Vec::new(),
-        affected_rows: 1,
+        affected_rows: result.rows.len(), // 返回受影响的行数
     })
 }
 
 /// 执行CREATE TABLE命令
 fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // 输出完整的SQL语句，用于调试
-    println!("Debug: Executing CREATE TABLE SQL: '{}'", sql);
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing CREATE TABLE SQL: {}", sql);
     
-    // 尝试解析CREATE TABLE语句，验证语法
-    if let Err(err) = crate::ddl_compiler::parse_ddl_content(sql) {
-        println!("Debug: CREATE TABLE parsing failed: {:?}", err);
-        return Err(SqlError::from(err));
-    }
+    let sql_lower = sql.trim().to_lowercase();
     
-    // 使用sql_query方法执行CREATE TABLE语句
-    let result = db.sql_query(sql);
+    // 查找表名和字段定义开始位置
+    let after_create = sql_lower.strip_prefix("create table ").ok_or(SqlError::Parsing("Not a CREATE TABLE statement".to_string()))?;
+    let table_name_end = after_create.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(after_create.len());
+    let table_name = after_create[..table_name_end].trim().to_string();
     
-    // 检查执行结果
-    match result {
-        Ok(_) => {
-            println!("CREATE TABLE executed successfully");
-            // 返回成功结果，受影响行数为1
-            Ok(ResultSet {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                affected_rows: 1,
-            })
-        },
-        Err(err) => {
-            println!("CREATE TABLE failed: {:?}", err);
-            println!("Debug: SQL statement: {}", sql);
-            Err(SqlError::from(err))
+    // 查找字段定义的开始和结束位置
+    let fields_start = sql.find('(').ok_or(SqlError::Parsing("Missing opening parenthesis for fields".to_string()))?;
+    let fields_end = sql.rfind(')').ok_or(SqlError::Parsing("Missing closing parenthesis for fields".to_string()))?;
+    
+    // 提取字段定义部分
+    let fields_part = &sql[fields_start + 1..fields_end].trim();
+    
+    // 解析字段定义
+    let mut fields = Vec::new();
+    let mut primary_key_index = None;
+    
+    // 按逗号分割字段定义，但跳过括号内的逗号
+    let mut bracket_count = 0;
+    let mut field_start = 0;
+    
+    for (i, c) in fields_part.chars().enumerate() {
+        match c {
+            '(' => bracket_count += 1,
+            ')' => bracket_count -= 1,
+            ',' => if bracket_count == 0 {
+                // 提取字段定义
+                let field_def = &fields_part[field_start..i].trim();
+                if !field_def.is_empty() {
+                    // 解析字段定义
+                    let field_parts: Vec<&str> = field_def.split_whitespace().collect();
+                    if field_parts.len() >= 2 {
+                        let field_name = field_parts[0];
+                        let data_type_str = field_parts[1].to_uppercase();
+                        
+                        // 转换数据类型
+                        let data_type = match data_type_str.as_str() {
+                            "INT" | "INTEGER" => remdb::types::DataType::Int32,
+                            "BIGINT" => remdb::types::DataType::Int64,
+                            "FLOAT" => remdb::types::DataType::Float32,
+                            "DOUBLE" => remdb::types::DataType::Float64,
+                            "BOOLEAN" => remdb::types::DataType::Bool,
+                            "TIMESTAMP" => remdb::types::DataType::Timestamp,
+                            "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                            _ => remdb::types::DataType::String, // 默认使用String类型
+                        };
+                        
+                        fields.push((field_name, data_type));
+                        
+                        // 检查是否为主键
+                        if field_parts.iter().any(|&part| part.eq_ignore_ascii_case("PRIMARY") && part.eq_ignore_ascii_case("KEY")) {
+                            primary_key_index = Some(fields.len() - 1);
+                        }
+                    }
+                }
+                field_start = i + 1;
+            },
+            _ => {},
         }
     }
+    
+    // 处理最后一个字段
+    let last_field = &fields_part[field_start..].trim();
+    if !last_field.is_empty() {
+        let field_parts: Vec<&str> = last_field.split_whitespace().collect();
+        if field_parts.len() >= 2 {
+            let field_name = field_parts[0];
+            let data_type_str = field_parts[1].to_uppercase();
+            
+            // 转换数据类型
+            let data_type = match data_type_str.as_str() {
+                "INT" | "INTEGER" => remdb::types::DataType::Int32,
+                "BIGINT" => remdb::types::DataType::Int64,
+                "FLOAT" => remdb::types::DataType::Float32,
+                "DOUBLE" => remdb::types::DataType::Float64,
+                "BOOLEAN" => remdb::types::DataType::Bool,
+                "TIMESTAMP" => remdb::types::DataType::Timestamp,
+                "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                _ => remdb::types::DataType::String, // 默认使用String类型
+            };
+            
+            fields.push((field_name, data_type));
+            
+            // 检查是否为主键
+            if field_parts.iter().any(|&part| part.eq_ignore_ascii_case("PRIMARY") && part.eq_ignore_ascii_case("KEY")) {
+                primary_key_index = Some(fields.len() - 1);
+            }
+        }
+    }
+    
+    // 如果没有指定主键，默认使用第一个字段作为主键
+    if primary_key_index.is_none() && !fields.is_empty() {
+        primary_key_index = Some(0);
+    }
+    
+    // 调用 RemDb::create_table 方法创建表
+    db.create_table(&table_name, &fields, primary_key_index)?;
+    
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: 0,
+    })
 }
 
 /// 执行CREATE INDEX命令
 fn execute_create_index(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // 输出完整的SQL语句，用于调试
-    debug_println!("Debug: Executing CREATE INDEX SQL: '{}'", sql);
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing CREATE INDEX SQL: {}", sql);
     
-    // 使用sql_query方法执行CREATE INDEX语句
-    db.sql_query(sql)?;
+    let sql_lower = sql.trim().to_lowercase();
     
-    // 返回成功结果，受影响行数为1
+    // 解析CREATE INDEX语句
+    // 格式：CREATE INDEX index_name ON table_name (column_name) USING index_type;
+    
+    // 提取索引名
+    let after_create = sql_lower.strip_prefix("create index ").ok_or(SqlError::Parsing("Not a CREATE INDEX statement".to_string()))?;
+    let index_name_end = after_create.find(" on ").ok_or(SqlError::Parsing("Missing ON keyword".to_string()))?;
+    let index_name = after_create[..index_name_end].trim().to_string();
+    
+    // 提取表名
+    let after_on = &after_create[index_name_end + 4..];
+    let table_name_end = after_on.find('(').ok_or(SqlError::Parsing("Missing opening parenthesis for column".to_string()))?;
+    let table_name = after_on[..table_name_end].trim().to_string();
+    
+    // 提取字段名
+    let column_start = after_on.find('(').ok_or(SqlError::Parsing("Missing opening parenthesis for column".to_string()))?;
+    let column_end = after_on.find(')').ok_or(SqlError::Parsing("Missing closing parenthesis for column".to_string()))?;
+    let column_name = after_on[column_start + 1..column_end].trim().to_string();
+    
+    // 提取索引类型（如果有）
+    let index_type = if let Some(using_pos) = after_on.find(" using ") {
+        let using_part = &after_on[using_pos + 6..];
+        let type_end = using_part.find(';').unwrap_or(using_part.len());
+        let type_str = using_part[..type_end].trim().to_uppercase();
+        
+        match type_str.as_str() {
+            "BTREE" => remdb::types::IndexType::BTree,
+            "TTREE" => remdb::types::IndexType::TTree,
+            "HASH" => remdb::types::IndexType::Hash,
+            "SORTEDARRAY" => remdb::types::IndexType::SortedArray,
+            _ => remdb::types::IndexType::BTree, // 默认使用BTree索引
+        }
+    } else {
+        remdb::types::IndexType::BTree // 默认使用BTree索引
+    };
+    
+    // 调用 RemDb::create_index 方法创建索引
+    db.create_index(&table_name, &column_name, index_type)?;
+    
+    // 构造结果集
     Ok(ResultSet {
         columns: Vec::new(),
         rows: Vec::new(),
-        affected_rows: 1,
+        affected_rows: 0,
     })
 }
 

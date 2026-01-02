@@ -729,16 +729,16 @@ async fn main() {
     
     // 如果启用了JDBC服务，让程序继续运行，不要退出
     if should_start_jdbc {
-        println!("\n--- JDBC server is running in background ---");
+        println!("\n--- JDBC and PubSub server are running in background ---");
         println!("Press Ctrl+C to stop the server");
         tokio::signal::ctrl_c().await.unwrap();
         println!("\nStopping JDBC server...");
     }
     
     // 程序退出前关闭PubSub系统
-    println!("Stopping PubSub system...");
+    println!("Stopping PubSub server...");
     use remdb::pubsub::shutdown as pubsub_shutdown;
     if let Err(err) = pubsub_shutdown() {
-        eprintln!("Warning: Failed to shutdown PubSub system: {:?}", err);
+        eprintln!("Warning: Failed to shutdown PubSub server: {:?}", err);
     }
 }
