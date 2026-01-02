@@ -1,4 +1,4 @@
-package com.remdb.jdbc;
+package cn.totaltrust.remdb;
 
 import java.sql.*;
 import java.io.InputStream;
@@ -43,6 +43,11 @@ public class RemDbResultSet implements ResultSet {
     @Override
     public void close() throws SQLException {
         closed = true;
+    }
+
+    @Override
+    public boolean isClosed() throws SQLException {
+        return closed;
     }
 
     @Override
@@ -190,13 +195,12 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
-    public Reader getAsciiStream(String columnLabel) throws SQLException {
+    public InputStream getAsciiStream(String columnLabel) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getAsciiStream not supported");
     }
 
-    @Override
-    public Reader getUnicodeStream(String columnLabel) throws SQLException {
+    public InputStream getUnicodeStream(String columnLabel) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getUnicodeStream not supported");
     }
@@ -598,6 +602,42 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
+    public boolean rowDeleted() throws SQLException {
+        checkClosed();
+        return false;
+    }
+
+    @Override
+    public boolean rowInserted() throws SQLException {
+        checkClosed();
+        return false;
+    }
+
+    @Override
+    public boolean rowUpdated() throws SQLException {
+        checkClosed();
+        return false;
+    }
+
+    @Override
+    public String getCursorName() throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("getCursorName not supported");
+    }
+
+    @Override
+    public SQLWarning getWarnings() throws SQLException {
+        checkClosed();
+        return null;
+    }
+
+    @Override
+    public void clearWarnings() throws SQLException {
+        checkClosed();
+        // No warnings to clear
+    }
+
+    @Override
     public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         return getObject(columnIndex);
@@ -694,18 +734,6 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
-    public boolean getURL(int columnIndex) throws SQLException {
-        checkClosed();
-        throw new SQLFeatureNotSupportedException("getURL not supported");
-    }
-
-    @Override
-    public boolean getURL(String columnLabel) throws SQLException {
-        checkClosed();
-        throw new SQLFeatureNotSupportedException("getURL not supported");
-    }
-
-    @Override
     public URL getURL(int columnIndex) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getURL not supported");
@@ -742,6 +770,18 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
+    public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateBlob not supported");
+    }
+
+    @Override
+    public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateBlob not supported");
+    }
+
+    @Override
     public void updateClob(int columnIndex, Clob x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateClob not supported");
@@ -749,6 +789,18 @@ public class RemDbResultSet implements ResultSet {
 
     @Override
     public void updateClob(String columnLabel, Clob x) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateClob not supported");
+    }
+
+    @Override
+    public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateClob not supported");
+    }
+
+    @Override
+    public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateClob not supported");
     }
@@ -871,10 +923,10 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
-    public boolean relative(int rows) throws SQLException {
+    public boolean relative(int rowsToMove) throws SQLException {
         checkClosed();
-        currentRowIndex += rows;
-        return currentRowIndex >= 0 && currentRowIndex < rows.size();
+        currentRowIndex += rowsToMove;
+        return currentRowIndex >= 0 && currentRowIndex < this.rows.size();
     }
 
     @Override
@@ -930,33 +982,33 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
-    public Object getObject(int columnIndex, Class<?> type) throws SQLException {
+    public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
         checkClosed();
         String value = getString(columnIndex);
         if (type == String.class) {
-            return value;
+            return type.cast(value);
         } else if (type == Integer.class) {
-            return Integer.parseInt(value);
+            return type.cast(Integer.parseInt(value));
         } else if (type == Long.class) {
-            return Long.parseLong(value);
+            return type.cast(Long.parseLong(value));
         } else if (type == Double.class) {
-            return Double.parseDouble(value);
+            return type.cast(Double.parseDouble(value));
         } else if (type == Float.class) {
-            return Float.parseFloat(value);
+            return type.cast(Float.parseFloat(value));
         } else if (type == Boolean.class) {
-            return Boolean.parseBoolean(value) || value.equals("1");
+            return type.cast(Boolean.parseBoolean(value) || value.equals("1"));
         } else if (type == Byte.class) {
-            return Byte.parseByte(value);
+            return type.cast(Byte.parseByte(value));
         } else if (type == Short.class) {
-            return Short.parseShort(value);
+            return type.cast(Short.parseShort(value));
         } else if (type == BigDecimal.class) {
-            return new BigDecimal(value);
+            return type.cast(new BigDecimal(value));
         } else if (type == Date.class) {
-            return Date.valueOf(value);
+            return type.cast(Date.valueOf(value));
         } else if (type == Time.class) {
-            return Time.valueOf(value);
+            return type.cast(Time.valueOf(value));
         } else if (type == Timestamp.class) {
-            return Timestamp.valueOf(value);
+            return type.cast(Timestamp.valueOf(value));
         } else {
             throw new SQLException("Unsupported type: " + type.getName());
         }
@@ -969,49 +1021,41 @@ public class RemDbResultSet implements ResultSet {
         return getObject(columnIndex, type);
     }
 
-    @Override
     public Ref getRef(int columnIndex, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getRef not supported");
     }
 
-    @Override
     public Ref getRef(String columnLabel, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getRef not supported");
     }
 
-    @Override
     public Blob getBlob(int columnIndex, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getBlob not supported");
     }
 
-    @Override
     public Blob getBlob(String columnLabel, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getBlob not supported");
     }
 
-    @Override
     public Clob getClob(int columnIndex, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getClob not supported");
     }
 
-    @Override
     public Clob getClob(String columnLabel, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getClob not supported");
     }
 
-    @Override
     public Array getArray(int columnIndex, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getArray not supported");
     }
 
-    @Override
     public Array getArray(String columnLabel, Map<String, Class<?>> map) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getArray not supported");
@@ -1192,6 +1236,18 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
+    public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateBlob not supported");
+    }
+
+    @Override
+    public void updateClob(int columnIndex, Reader reader) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateClob not supported");
+    }
+
+    @Override
     public void updateNClob(int columnIndex, Reader reader) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateNClob not supported");
@@ -1216,9 +1272,21 @@ public class RemDbResultSet implements ResultSet {
     }
 
     @Override
+    public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateBlob not supported");
+    }
+
+    @Override
     public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateCharacterStream not supported");
+    }
+
+    @Override
+    public void updateClob(String columnLabel, Reader reader) throws SQLException {
+        checkClosed();
+        throw new SQLFeatureNotSupportedException("updateClob not supported");
     }
 
     @Override
@@ -1236,25 +1304,21 @@ public class RemDbResultSet implements ResultSet {
         return iface.isInstance(this);
     }
 
-    @Override
     public void updateObject(int columnIndex, Object x, int targetSqlType, int scaleOrLength) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateObject not supported");
     }
 
-    @Override
     public void updateObject(String columnLabel, Object x, int targetSqlType, int scaleOrLength) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateObject not supported");
     }
 
-    @Override
     public void updateObject(int columnIndex, Object x, int targetSqlType) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateObject not supported");
     }
 
-    @Override
     public void updateObject(String columnLabel, Object x, int targetSqlType) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateObject not supported");
@@ -1272,107 +1336,66 @@ public class RemDbResultSet implements ResultSet {
         throw new SQLFeatureNotSupportedException("updateObject not supported");
     }
 
-    @Override
     public long getLargeSerialVersionUID() throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getLargeSerialVersionUID not supported");
     }
 
-    @Override
-    public long getLong(int columnIndex) throws SQLException {
-        checkClosed();
-        checkRowIndex();
-        checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
-        return Long.parseLong(value);
-    }
-
-    @Override
-    public long getLong(String columnLabel) throws SQLException {
-        checkClosed();
-        int columnIndex = findColumn(columnLabel);
-        return getLong(columnIndex);
-    }
-
-    @Override
-    public void updateLong(int columnIndex, long x) throws SQLException {
-        checkClosed();
-        throw new SQLFeatureNotSupportedException("updateLong not supported");
-    }
-
-    @Override
-    public void updateLong(String columnLabel, long x) throws SQLException {
-        checkClosed();
-        throw new SQLFeatureNotSupportedException("updateLong not supported");
-    }
-
-    @Override
     public long getLargeInt(int columnIndex) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getLargeInt not supported");
     }
 
-    @Override
     public long getLargeInt(String columnLabel) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("getLargeInt not supported");
     }
 
-    @Override
     public void updateLargeInt(int columnIndex, long x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeInt not supported");
     }
 
-    @Override
     public void updateLargeInt(String columnLabel, long x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeInt not supported");
     }
 
-    @Override
     public long getLargeLong(int columnIndex) throws SQLException {
         checkClosed();
         return getLong(columnIndex);
     }
 
-    @Override
     public long getLargeLong(String columnLabel) throws SQLException {
         checkClosed();
         return getLong(columnLabel);
     }
 
-    @Override
     public void updateLargeLong(int columnIndex, long x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeLong not supported");
     }
 
-    @Override
     public void updateLargeLong(String columnLabel, long x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeLong not supported");
     }
 
-    @Override
     public BigDecimal getLargeDecimal(int columnIndex) throws SQLException {
         checkClosed();
         return getBigDecimal(columnIndex);
     }
 
-    @Override
     public BigDecimal getLargeDecimal(String columnLabel) throws SQLException {
         checkClosed();
         return getBigDecimal(columnLabel);
     }
 
-    @Override
     public void updateLargeDecimal(int columnIndex, BigDecimal x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeDecimal not supported");
     }
 
-    @Override
     public void updateLargeDecimal(String columnLabel, BigDecimal x) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("updateLargeDecimal not supported");

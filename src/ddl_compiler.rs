@@ -1,10 +1,4 @@
-// 添加extern crate alloc语句
-extern crate alloc;
-
-use std::fs::File;
-use std::io::Read;
-use alloc::sync::Arc;
-use remdb::{types::{TableDef, FieldDef, DataType, RecordHeader}, RemDb, Result as RemResult, DdlExecutor};
+use remdb::{types::{TableDef, FieldDef, DataType}, RemDb, Result as RemResult};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -22,6 +16,7 @@ struct DdlColumn {
     size: usize,
     nullable: bool,
     primary_key: bool,
+    auto_increment: bool,
 }
 
 /// DDL索引定义
@@ -33,77 +28,82 @@ struct DdlIndex {
 }
 
 /// 编译DDL文件，生成表定义
-pub fn compile_ddl_file(path: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
+pub fn compile_ddl_file(file_path: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
     // 读取DDL文件内容
-    let mut file = File::open(path)?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
+    let content = std::fs::read_to_string(file_path)?;
     
     // 解析DDL内容
-    let tables = parse_ddl_content(&content)?;
-    
-    Ok(tables)
+    parse_ddl_content(&content)
 }
 
 /// 解析DDL内容，生成表定义
-fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
+pub fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
     let mut tables = Vec::new();
-    let mut indices = Vec::new();
-    let mut current_table = None;
-    let mut current_columns = Vec::new();
-    let mut in_table = false;
     let mut table_id = 0;
     
-    // 按行处理DDL内容
+    // 预处理：移除注释和空行，合并多行语句
+    let mut processed_content = String::new();
+    
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with("--") {
             continue;
         }
-        
-        // 开始解析CREATE TABLE语句
-        if line.starts_with("CREATE TABLE") {
-            // 提取表名
-            let table_name = line
-                .trim_start_matches("CREATE TABLE")
-                .trim()
-                .split_whitespace()
-                .next()
-                .ok_or(DdlError::Parsing("Invalid CREATE TABLE syntax".to_string()))?;
+        processed_content.push_str(line);
+        processed_content.push(' ');
+    }
+    
+    // 按分号分割语句
+    let statements: Vec<&str> = processed_content.split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
+    println!("Debug: Found {} statements in DDL", statements.len());
+    
+    // 处理每个语句
+    for (i, statement) in statements.iter().enumerate() {
+        println!("Debug: Statement {}: {}", i, statement);
+        let words: Vec<&str> = statement.split_whitespace().collect();
+        if words.len() >= 3 && 
+           (words[0].eq_ignore_ascii_case("CREATE") || words[0].eq_ignore_ascii_case("create")) && 
+           (words[1].eq_ignore_ascii_case("TABLE") || words[1].eq_ignore_ascii_case("table")) {
+            // 处理CREATE TABLE语句
+            let table_line = statement;
             
-            // 存储表名
-            current_table = Some(Box::leak(Box::new(table_name.to_string())) as &'static str);
-            in_table = true;
-            continue;
-        }
-        
-        // 解析CREATE INDEX语句
-        if line.starts_with("CREATE INDEX") {
-            let index = parse_index_def(line)?;
-            indices.push(index);
-            continue;
-        }
-        
-        // 结束解析表定义
-        if in_table && line.ends_with(';') {
-            if let Some(table_name) = current_table {
-                // 生成表定义
-                let table = create_table_def(table_id, table_name, &current_columns)?;
-                tables.push(table);
-                table_id += 1;
-                
-                // 重置状态
-                current_table = None;
-                current_columns.clear();
-                in_table = false;
+            // 查找左括号，用于分离表名和列定义
+            let left_paren = table_line.find('(')
+                .ok_or(DdlError::Parsing("Invalid CREATE TABLE syntax: missing '('".to_string()))?;
+            
+            // 提取表名部分（CREATE TABLE和左括号之间的内容）
+            let table_name_part = &table_line[12..left_paren]; // 跳过"CREATE TABLE "
+            let table_name_str = table_name_part.trim().to_string();
+            let table_name = Box::leak(Box::new(table_name_str)) as &'static str;
+            
+            // 提取列定义部分（左括号到右括号之间的内容）
+            let columns_part = &table_line[left_paren..];
+            
+            // 查找右括号（使用rfind找到最后一个右括号，避免被VARCHAR(50)中的括号干扰）
+            let right_paren = columns_part.rfind(')')
+                .ok_or(DdlError::Parsing(format!("Invalid CREATE TABLE syntax: missing ')'")))?;
+            
+            // 提取括号内的列定义
+            let columns_content = &columns_part[1..right_paren];
+            
+            // 解析列定义
+            let mut columns = Vec::new();
+            for column_str in columns_content.split(',') {
+                let column_str = column_str.trim();
+                if !column_str.is_empty() {
+                    let column = parse_column_def(column_str)?;
+                    columns.push(column);
+                }
             }
-            continue;
-        }
-        
-        // 解析列定义
-        if in_table && !line.starts_with('(') && !line.starts_with(')') {
-            let column = parse_column_def(line)?;
-            current_columns.push(column);
+            
+            // 生成表定义
+            let table = create_table_def(table_id, table_name, &columns)?;
+            tables.push(table);
+            table_id += 1;
         }
     }
     
@@ -140,25 +140,67 @@ fn parse_index_def(line: &str) -> std::result::Result<DdlIndex, DdlError> {
 fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     // 移除逗号和分号
     let line = line.trim_end_matches([',', ';'].as_slice());
-    let parts: Vec<&str> = line.split_whitespace().collect();
     
-    if parts.len() < 2 {
-        return Err(DdlError::Parsing(format!("Invalid column definition: {}", line)));
+    // 查找第一个空格，用于分离列名和数据类型
+    let first_space = line.find(|c: char| c.is_whitespace()).ok_or(
+        DdlError::Parsing(format!("Invalid column definition: missing data type for '{}'", line))
+    )?;
+    
+    // 提取列名
+    let name = &line[..first_space].trim();
+    
+    // 查找数据类型结束位置（处理带括号的类型如 VARCHAR(50)）
+    let remaining = &line[first_space..].trim();
+    
+    // 检查数据类型是否包含左括号
+    let typ: &str;
+    let constraints_part: &str;
+    
+    if let Some(left_paren) = remaining.find('(') {
+        // 查找匹配的右括号
+        let right_paren = remaining[left_paren..].find(')')
+            .ok_or(DdlError::Parsing(format!("Invalid column definition: missing closing parenthesis in data type: {}", line)))? + left_paren + 1;
+        
+        // 提取数据类型和约束部分
+        typ = &remaining[..right_paren].trim();
+        constraints_part = &remaining[right_paren..].trim();
+    } else {
+        // 数据类型没有括号，查找下一个空格来分离数据类型和约束
+        if let Some(next_space) = remaining.find(|c: char| c.is_whitespace()) {
+            typ = &remaining[..next_space].trim();
+            constraints_part = &remaining[next_space..].trim();
+        } else {
+            // 只有数据类型，没有约束
+            typ = remaining;
+            constraints_part = "";
+        }
     }
-    
-    let name = parts[0];
-    let typ = parts[1];
     
     // 解析数据类型
     let (data_type, size) = parse_data_type(typ)?;
     
-    // 检查是否有NOT NULL约束
-    let nullable = !parts.iter().any(|&p| p.eq_ignore_ascii_case("NOT")) || 
-                   parts.iter().any(|&p| p.eq_ignore_ascii_case("NULL"));
+    // 解析约束
+    let mut nullable = true;
+    let mut primary_key = false;
+    let mut auto_increment = false;
     
-    // 检查是否为主键
-    let primary_key = parts.iter().any(|&p| p.eq_ignore_ascii_case("PRIMARY")) && 
-                      parts.iter().any(|&p| p.eq_ignore_ascii_case("KEY"));
+    // 将约束部分转换为小写，便于比较
+    let constraints_lower = constraints_part.to_lowercase();
+    
+    // 检查NOT NULL约束
+    if constraints_lower.contains("not null") {
+        nullable = false;
+    }
+    
+    // 检查PRIMARY KEY约束
+    if constraints_lower.contains("primary key") {
+        primary_key = true;
+    }
+    
+    // 检查AUTO_INCREMENT约束（支持多种写法）
+    if constraints_lower.contains("auto_increment") || constraints_lower.contains("autoincrement") {
+        auto_increment = true;
+    }
     
     Ok(DdlColumn {
         name: Box::leak(Box::new(name.to_string())) as &'static str,
@@ -166,22 +208,94 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
         size,
         nullable,
         primary_key,
+        auto_increment,
     })
 }
 
 /// 解析数据类型
 fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError> {
-    match typ.to_uppercase().as_str() {
-        "INTEGER" | "INT" => Ok((DataType::Int32, 4)),
-        "BIGINT" => Ok((DataType::Int64, 8)),
-        "SMALLINT" => Ok((DataType::Int16, 2)),
-        "TINYINT" => Ok((DataType::Int8, 1)),
-        "BOOLEAN" | "BOOL" => Ok((DataType::Bool, 1)),
-        "REAL" | "FLOAT" => Ok((DataType::Float32, 4)),
-        "DOUBLE" => Ok((DataType::Float64, 8)),
-        "TEXT" => Ok((DataType::String, 64)), // 固定大小64字节
-        _ => Err(DdlError::Parsing(format!("Unsupported data type: {}", typ))),
+    let typ_lower = typ.to_lowercase();
+    
+    // 处理INT类型
+    if typ_lower.starts_with("int") {
+        // 检查是否有括号（如INT(10)）
+        if let Some(left_paren) = typ_lower.find('(') {
+            if let Some(right_paren) = typ_lower[left_paren..].find(')') {
+                let size_str = &typ_lower[left_paren + 1..left_paren + right_paren];
+                let size = size_str.parse::<usize>().map_err(|_| {
+                    DdlError::Parsing(format!("Invalid size for INT type: {}", typ))
+                })?;
+                return Ok((DataType::Int32, size));
+            }
+        }
+        return Ok((DataType::Int32, 4)); // 默认大小为4字节
     }
+    
+    // 处理BIGINT类型
+    if typ_lower.starts_with("bigint") {
+        return Ok((DataType::Int64, 8)); // BIGINT固定8字节
+    }
+    
+    // 处理DOUBLE类型
+    if typ_lower.starts_with("double") {
+        return Ok((DataType::Float64, 8)); // DOUBLE固定8字节
+    }
+    
+    // 处理FLOAT类型
+    if typ_lower.starts_with("float") {
+        return Ok((DataType::Float32, 4)); // FLOAT固定4字节
+    }
+    
+    // 处理TEXT类型
+    if typ_lower.starts_with("text") {
+        // 检查是否有括号（如TEXT(255)）
+        if let Some(left_paren) = typ_lower.find('(') {
+            if let Some(right_paren) = typ_lower[left_paren..].find(')') {
+                let size_str = &typ_lower[left_paren + 1..left_paren + right_paren];
+                let size = size_str.parse::<usize>().map_err(|_| {
+                    DdlError::Parsing(format!("Invalid size for TEXT type: {}", typ))
+                })?;
+                return Ok((DataType::String, size));
+            }
+        }
+        return Ok((DataType::String, 255)); // 默认大小为255字节
+    }
+    
+    // 处理VARCHAR类型
+    if typ_lower.starts_with("varchar") {
+        // 查找括号
+        let left_paren = typ_lower.find('(').ok_or(
+            DdlError::Parsing(format!("Invalid VARCHAR syntax: missing size in '{}'", typ))
+        )?;
+        let right_paren = typ_lower[left_paren..].find(')').ok_or(
+            DdlError::Parsing(format!("Invalid VARCHAR syntax: missing closing parenthesis in '{}'", typ))
+        )? + left_paren + 1;
+        
+        let size_str = &typ_lower[left_paren + 1..right_paren - 1];
+        let size = size_str.parse::<usize>().map_err(|_| {
+            DdlError::Parsing(format!("Invalid size for VARCHAR type: {}", typ))
+        })?;
+        
+        return Ok((DataType::String, size));
+    }
+    
+    // 处理BOOLEAN类型
+    if typ_lower.starts_with("boolean") || typ_lower.starts_with("bool") {
+        return Ok((DataType::Bool, 1)); // BOOLEAN固定1字节
+    }
+    
+    // 处理DATE类型
+    if typ_lower.starts_with("date") {
+        return Ok((DataType::String, 10)); // DATE格式：YYYY-MM-DD，固定10字节
+    }
+    
+    // 处理DATETIME类型
+    if typ_lower.starts_with("datetime") {
+        return Ok((DataType::String, 19)); // DATETIME格式：YYYY-MM-DD HH:MM:SS，固定19字节
+    }
+    
+    // 不支持的数据类型
+    Err(DdlError::Parsing(format!("Unsupported data type: {}", typ)))
 }
 
 /// 创建表定义
@@ -204,7 +318,7 @@ fn create_table_def(table_id: usize, name: &'static str, columns: &[DdlColumn]) 
             not_null: !col.nullable,
             primary_key: col.primary_key,
             unique: false,
-            auto_increment: false,
+            auto_increment: col.auto_increment,
         };
         
         field_defs.push(field_def);
@@ -226,48 +340,45 @@ fn create_table_def(table_id: usize, name: &'static str, columns: &[DdlColumn]) 
     })
 }
 
-/// 初始化数据库实例
-pub fn init_database(tables: Vec<TableDef>, total_memory: Option<usize>, default_max_records: Option<usize>, low_power_mode_supported: Option<bool>, low_power_max_records: Option<usize>) -> RemResult<RemDb> {
-    // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
-    let static_tables = Box::leak(Box::new(tables));
+#[cfg(test)]
+mod tests {
+    use super::*;
     
-    // 创建默认内存分配器
-    static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator = remdb::config::DefaultMemoryAllocator;
-    
-    // 使用非常小的默认最大记录数，避免内存不足
-    let small_max_records = 1; // 仅使用1条记录，最小化内存使用
-    
-    // 创建配置
-    let config = Box::leak(Box::new(remdb::config::DbConfig {
-        tables: static_tables,
-        total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
-        low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
-        low_power_max_records: Some(small_max_records), // 使用非常小的默认值
-        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
-        memory_allocator: unsafe { &*(&raw const DEFAULT_ALLOCATOR as *const _) as &'static dyn remdb::config::MemoryAllocator },
-        log_mode: remdb::config::LogMode::Async, // 默认异步日志模式
-        checkpoint_interval_ms: 30000, // 默认30秒
-        log_file_size_limit: 16 * 1024 * 1024, // 默认16MB
-        log_prealloc_size: 4 * 1024 * 1024, // 默认4MB
-        log_segment_size: 16 * 1024 * 1024, // 默认16MB
-        retained_checkpoints: 3, // 默认保留3个检查点
-        ha_role: remdb::config::HARole::Master, // 默认主节点
-        replication_mode: remdb::config::ReplicationMode::Async, // 默认异步复制
-        heartbeat_interval_ms: 1000, // 默认1秒心跳
-        failure_detection_ms: 5000, // 默认5秒故障检测
-        sync_timeout_ms: 2000, // 默认2秒同步超时
-        master_address: None, // 默认无主节点地址
-        master_port: None, // 默认无主节点端口
-    }));
-    
-    // 创建数据库实例
-    let mut db = RemDb::new(config);
-    
-    // 初始化数据库
-    db.init()?;
-    
-    // 注意：我们不需要手动创建表，因为RemDb的sql_query方法会在执行查询时自动创建表
-    // 这是因为sql_query方法会解析SQL查询，提取表名，然后查找表，如果表不存在，会自动创建表
-    
-    Ok(db)
+    #[test]
+    fn test_create_table_with_auto_increment() {
+        // Test CREATE TABLE statement with AUTO_INCREMENT and VARCHAR(n)
+        let create_table_sql = "CREATE TABLE iot_devices (id INT AUTO_INCREMENT PRIMARY KEY,  device_id VARCHAR(50),  timestamp BIGINT,  temperature DOUBLE,  humidity DOUBLE,  pressure DOUBLE,  battery_level INT);";
+        
+        // Parse the CREATE TABLE statement
+        match parse_ddl_content(create_table_sql) {
+            Ok(tables) => {
+                // Verify that one table was created
+                assert_eq!(tables.len(), 1, "Expected 1 table, got {}", tables.len());
+                
+                let table = &tables[0];
+                assert_eq!(table.name, "iot_devices", "Expected table name 'iot_devices', got '{}'", table.name);
+                
+                // Verify that 7 fields were created
+                assert_eq!(table.fields.len(), 7, "Expected 7 fields, got {}", table.fields.len());
+                
+                // Verify field properties
+                let fields = &table.fields;
+                
+                // Check id field (AUTO_INCREMENT PRIMARY KEY)
+                assert_eq!(fields[0].name, "id", "Expected field name 'id', got '{}'", fields[0].name);
+                assert_eq!(fields[0].size, 4, "Expected size 4 for INT, got {}", fields[0].size);
+                assert_eq!(fields[0].primary_key, true, "Expected id to be primary key, got false");
+                assert_eq!(fields[0].auto_increment, true, "Expected id to be AUTO_INCREMENT, got false");
+                
+                // Check device_id field (VARCHAR(50))
+                assert_eq!(fields[1].name, "device_id", "Expected field name 'device_id', got '{}'", fields[1].name);
+                assert_eq!(fields[1].size, 50, "Expected size 50 for VARCHAR(50), got {}", fields[1].size);
+                
+                println!("✓ CREATE TABLE with AUTO_INCREMENT and VARCHAR(n) parsed successfully!");
+            },
+            Err(err) => {
+                panic!("CREATE TABLE parsing failed: {:?}", err);
+            }
+        }
+    }
 }

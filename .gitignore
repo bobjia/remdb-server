@@ -1,5 +1,6 @@
 /target
 .trae/*
 snapshots/*
+/jdbc-driver/target/*
 *.log
 remdb_history.txt

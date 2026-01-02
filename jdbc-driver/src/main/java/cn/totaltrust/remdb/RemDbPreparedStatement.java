@@ -1,4 +1,4 @@
-package com.remdb.jdbc;
+package cn.totaltrust.remdb;
 
 import java.sql.*;
 import java.util.ArrayList;
@@ -509,13 +509,11 @@ public class RemDbPreparedStatement implements PreparedStatement {
         throw new SQLFeatureNotSupportedException("addBatch not supported");
     }
 
-    @Override
     public void clearBatch(String sql) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("clearBatch not supported");
     }
 
-    @Override
     public int[] executeBatch(String sql) throws SQLException {
         checkClosed();
         throw new SQLFeatureNotSupportedException("executeBatch not supported");
@@ -593,7 +591,6 @@ public class RemDbPreparedStatement implements PreparedStatement {
         return execute();
     }
 
-    @Override
     public Statement getStatement() throws SQLException {
         checkClosed();
         return new RemDbStatement(connection);
@@ -691,7 +688,7 @@ public class RemDbPreparedStatement implements PreparedStatement {
                     strVal = strVal.replace("'", "''");
                     sb.append("'").append(strVal).append("'");
                 } else if (param instanceof Boolean) {
-                    sb.append(param ? 1 : 0);
+                    sb.append(((Boolean) param) ? 1 : 0);
                 } else {
                     sb.append(param.toString());
                 }

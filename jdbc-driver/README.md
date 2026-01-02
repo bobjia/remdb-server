@@ -17,7 +17,7 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 
 ## 安装方法
 
-### 方法一：使用编译好的 JAR 文件
+### 方法一：使用 Gradle 编译 JAR 文件
 
 1. 编译 JDBC 驱动：
    ```bash
@@ -29,7 +29,19 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 
 3. 将该 JAR 文件添加到你的 Java 项目的类路径中
 
-### 方法二：使用 Maven 本地仓库
+### 方法二：使用 Maven 编译 JAR 文件
+
+1. 编译 JDBC 驱动：
+   ```bash
+   cd jdbc-driver
+   mvn clean package
+   ```
+
+2. 编译后的 JAR 文件将位于 `target/remdb-jdbc-driver-0.1.0.jar`
+
+3. 将该 JAR 文件添加到你的 Java 项目的类路径中
+
+### 方法三：使用 Maven 本地仓库（Gradle）
 
 1. 发布到本地 Maven 仓库：
    ```bash
@@ -40,8 +52,25 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 2. 在你的 Maven 项目中添加依赖：
    ```xml
    <dependency>
-       <groupId>com.remdb</groupId>
-       <artifactId>jdbc-driver</artifactId>
+       <groupId>cn.totaltrust.remdb</groupId>
+       <artifactId>remdb-jdbc-driver</artifactId>
+       <version>0.1.0</version>
+   </dependency>
+   ```
+
+### 方法四：使用 Maven 本地仓库（Maven）
+
+1. 发布到本地 Maven 仓库：
+   ```bash
+   cd jdbc-driver
+   mvn clean install
+   ```
+
+2. 在你的 Maven 项目中添加依赖：
+   ```xml
+   <dependency>
+       <groupId>cn.totaltrust.remdb</groupId>
+       <artifactId>remdb-jdbc-driver</artifactId>
        <version>0.1.0</version>
    </dependency>
    ```

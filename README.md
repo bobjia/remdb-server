@@ -6,7 +6,7 @@ remdb-server 是一个基于 remdb 库构建的轻量级数据库服务器，支
 
 ### 核心功能
 - **轻量级数据库服务器**：基于 remdb 库，提供高效的数据存储和检索
-- **JDBC 支持**：提供 JDBC 接口，方便 Java 应用程序连接
+- **JDBC 支持**：提供完整的 JDBC 驱动，方便 Java 应用程序连接
 - **DDL 支持**：支持通过 DDL 文件定义数据库表结构
 - **快照管理**：支持从快照目录加载数据，实现数据持久化
 - **交互式 CLI**：提供命令行界面，方便直接操作数据库
@@ -348,6 +348,105 @@ MIT License
 - 支持 PubSub 功能
 - 支持高可用配置
 - 提供交互式 CLI
+
+## JDBC 驱动
+
+remdb-server 提供了完整的 JDBC 驱动，方便 Java 应用程序连接和操作数据库。更多详细信息请查看 [jdbc-driver/README.md](jdbc-driver/README.md)。
+
+### 功能特性
+
+- 支持基本的 JDBC 连接管理
+- 支持 SQL 查询、插入、更新和删除操作
+- 支持事务处理（自动提交模式）
+- 支持结果集处理
+- 支持预编译语句（PreparedStatement）
+
+### 系统要求
+
+- Java 8 或更高版本
+- RemDb Server 0.1.0 或更高版本
+
+### 安装方法
+
+#### 使用 Maven 依赖
+
+在你的 Maven 项目中添加以下依赖：
+
+```xml
+<dependency>
+    <groupId>cn.totaltrust.remdb</groupId>
+    <artifactId>remdb-jdbc-driver</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+#### 手动编译 JAR 文件
+
+```bash
+# 使用 Maven 编译
+cd jdbc-driver
+mvn clean package
+
+# 编译后的 JAR 文件将位于 target/remdb-jdbc-driver-0.1.0.jar
+```
+
+### 使用示例
+
+```java
+import java.sql.*;
+
+public class RemDbExample {
+    public static void main(String[] args) {
+        String url = "jdbc:remdb://localhost:6666";
+        String user = "";
+        String password = "";
+
+        try (Connection conn = DriverManager.getConnection(url, user, password);
+             Statement stmt = conn.createStatement()) {
+
+            // 创建表
+            String createTableSQL = "CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name VARCHAR(50), age INT)";
+            stmt.executeUpdate(createTableSQL);
+
+            // 插入数据
+            String insertSQL = "INSERT INTO users (id, name, age) VALUES (1, 'Alice', 25)";
+            stmt.executeUpdate(insertSQL);
+
+            // 查询数据
+            String selectSQL = "SELECT id, name, age FROM users";
+            try (ResultSet rs = stmt.executeQuery(selectSQL)) {
+                while (rs.next()) {
+                    int id = rs.getInt("id");
+                    String name = rs.getString("name");
+                    int age = rs.getInt("age");
+                    System.out.printf("ID: %d, Name: %s, Age: %d%n", id, name, age);
+                }
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+### JDBC URL 格式
+
+```
+jdbc:remdb://host:port
+```
+
+- `host`: RemDb Server 的主机名或 IP 地址，默认为 `localhost`
+- `port`: RemDb Server 的 JDBC 监听端口，默认为 `6666`
+
+### 支持的 SQL 语句
+
+- `CREATE TABLE` - 创建表
+- `INSERT` - 插入数据
+- `SELECT` - 查询数据
+- `UPDATE` - 更新数据
+- `DELETE` - 删除数据
+- `DROP TABLE` - 删除表
 
 ## 致谢
 

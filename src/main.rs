@@ -7,7 +7,7 @@ mod jdbc_server;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use clap::Parser;
-use crate::ddl_compiler::{compile_ddl_file, init_database};
+use crate::ddl_compiler::compile_ddl_file;
 use crate::snapshot_loader::load_snapshot_from_dir;
 use crate::cli::run_cli;
 use crate::sql_engine::{execute_extended_sql, format_result_set};
@@ -305,6 +305,9 @@ struct Config {
     /// 最大允许的并发jdbc客户端连接数
     max_connections: Option<usize>,
     
+    /// JDBC执行超时时间（秒）
+    jdbc_timeout: Option<u64>,
+    
     /// pubsub配置
     pubsub: Option<PubSubConfig>,
     
@@ -397,6 +400,10 @@ struct Args {
     /// 最大允许的并发jdbc客户端连接数
     #[arg(long)]
     max_connections: Option<usize>,
+    
+    /// JDBC执行超时时间（秒）
+    #[arg(long)]
+    jdbc_timeout: Option<u64>,
     
     /// 是否启用pubsub功能
     #[arg(long)]
@@ -494,6 +501,7 @@ async fn main() {
     let jdbc_port = args.jdbc_port.or(config.jdbc_port);
     let jdbc_enabled = args.jdbc_enabled.or(config.jdbc_enabled);
     let max_connections = args.max_connections.or(config.max_connections);
+    let jdbc_timeout = args.jdbc_timeout.or(config.jdbc_timeout);
     
     // 合并pubsub配置
     let pubsub_enabled = args.pubsub_enabled.or(config.pubsub.as_ref().and_then(|p| p.enabled));
@@ -584,7 +592,7 @@ async fn main() {
         total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
         low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
         low_power_max_records: Some(low_power_max_records.unwrap_or(100)), // 默认100条记录
-        default_max_records: small_max_records, // 使用非常小的默认值，避免内存不足
+        default_max_records: default_max_records.unwrap_or(small_max_records), // 使用配置文件或命令行参数中的默认值，否则使用1000
         memory_allocator: unsafe {
             &*(&raw const DEFAULT_ALLOCATOR as *const _) as &'static dyn remdb::config::MemoryAllocator
         },
@@ -650,90 +658,20 @@ async fn main() {
             println!("Full image loaded successfully");
         }
     }
-    
-    // 测试导出功能
-    if args.test_export {
-        println!("\n--- Testing export functionality ---");
         
-        // 测试导出DDL
-        println!("\n1. Testing EXPORT DDL:");
-        let ddl_result = sql_engine::execute_extended_sql(&mut db, "export ddl exported_schema.ddl");
-        match ddl_result {
-            Ok(result) => {
-                println!("✓ Exported DDL successfully: {}", sql_engine::format_result_set(&result));
-            },
-            Err(err) => {
-                eprintln!("✗ Error exporting DDL: {:?}", err);
-            }
-        }
-        
-        // 测试导出数据
-        println!("\n2. Testing EXPORT DATA:");
-        let tables = ["users", "products", "orders"];
-        for table in tables {
-            let sql = format!("export data {} {}.csv", table, table);
-            let data_result = sql_engine::execute_extended_sql(&mut db, &sql);
-            match data_result {
-                Ok(result) => {
-                    println!("✓ Exported {} data: {}", table, sql_engine::format_result_set(&result));
-                },
-                Err(err) => {
-                    eprintln!("✗ Error exporting {} data: {:?}", table, err);
-                }
-            }
-        }
-        
-        // 测试导出全部
-        println!("\n3. Testing EXPORT ALL:");
-        let all_result = sql_engine::execute_extended_sql(&mut db, "export all export_all");
-        match all_result {
-            Ok(result) => {
-                println!("✓ Exported all data: {}", sql_engine::format_result_set(&result));
-            },
-            Err(err) => {
-                eprintln!("✗ Error exporting all data: {:?}", err);
-            }
-        }
-        
-        // 查看导出结果
-        println!("\n4. Export results:");
-        use std::fs;
-        if fs::metadata("exported_schema.ddl").is_ok() {
-            println!("✓ exported_schema.ddl created");
-        }
-        for table in tables {
-            let csv_file = format!("{}.csv", table);
-            if fs::metadata(&csv_file).is_ok() {
-                println!("✓ {} created", csv_file);
-            }
-        }
-        if fs::metadata("export_all").is_ok() {
-            println!("✓ export_all directory created");
-            if let Ok(entries) = fs::read_dir("export_all") {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        println!("   - {}", entry.file_name().to_string_lossy());
-                    }
-                }
-            }
-        }
-        
-        println!("\n✓ Export functionality test completed");
-        return;
-    }
-    
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
     let db_arc = Arc::new(Mutex::new(db));
     
     // 启动JDBC服务器（如果启用了JDBC服务且配置了端口，或者没有明确禁用）
     let should_start_jdbc = jdbc_enabled.unwrap_or(jdbc_port.is_some());
     if should_start_jdbc {
-        // 如果配置了端口，则使用配置的端口，否则使用默认端口5432
-        let actual_jdbc_port = jdbc_port.unwrap_or(5432);
-        let max_conns = max_connections.unwrap_or(100); // 默认最大连接数为100
-        let jdbc_server = JdbcServer::new(db_arc.clone(), actual_jdbc_port, max_conns);
+        // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
+        let actual_jdbc_port = jdbc_port.unwrap_or(6666);
+        let max_conns = max_connections.unwrap_or(5); // 默认最大连接数为5
+        let jdbc_timeout = jdbc_timeout.unwrap_or(5); // 默认超时时间为5秒
+        let jdbc_server = JdbcServer::new(db_arc.clone(), actual_jdbc_port, max_conns, jdbc_timeout);
         
-        println!("Starting JDBC server on port {} with max connections {}", actual_jdbc_port, max_conns);
+        println!("Starting JDBC server on port {} with max connections {} and timeout {} seconds", actual_jdbc_port, max_conns, jdbc_timeout);
         
         // 在后台启动JDBC服务器
         tokio::spawn(async move {
@@ -749,8 +687,8 @@ async fn main() {
     if pubsub_enabled.unwrap_or(false) {
         use remdb::pubsub::{PubSubConfig, UdpMode, init as pubsub_init};
         
-        // 从UDP绑定地址中提取端口号，默认使用9000
-        let mut pubsub_port = 9000;
+        // 从UDP绑定地址中提取端口号，默认使用6667
+        let mut pubsub_port = 6667;
         if let Some(bind_addr) = &pubsub_udp_bind {
             if let Some(addr) = bind_addr.split(':').last() {
                 if let Ok(port) = addr.parse::<u16>() {
@@ -786,50 +724,15 @@ async fn main() {
     if !args.non_interactive {
         let mut db_lock = db_arc.lock().await;
         cli::run_cli(&mut db_lock);
-    } else {
-        // 测试：直接执行tables命令查看表列表
-        println!("\n--- Testing database tables ---");
-        let mut db_lock = db_arc.lock().await;
-        let tables_result = sql_engine::execute_extended_sql(&mut db_lock, "tables");
-        match tables_result {
-            Ok(result) => {
-                println!("Tables command output:");
-                println!("{}", sql_engine::format_result_set(&result));
-            },
-            Err(err) => {
-                eprintln!("Error executing tables command: {:?}", err);
-            }
-        }
-        
-        // 测试：执行stat命令查看监控指标
-        println!("\n--- Testing stat command ---");
-        let mut db_lock = db_arc.lock().await;
-        let stat_result = sql_engine::execute_extended_sql(&mut db_lock, "stat");
-        match stat_result {
-            Ok(result) => {
-                println!("Stat command output:");
-                println!("{}", sql_engine::format_result_set(&result));
-            },
-            Err(err) => {
-                eprintln!("Error executing stat command: {:?}", err);
-            }
-        }
-        
-        // 测试：执行healthcheck命令查看健康状态
-        println!("\n--- Testing healthcheck command ---");
-        let mut db_lock = db_arc.lock().await;
-        let healthcheck_result = sql_engine::execute_extended_sql(&mut db_lock, "healthcheck");
-        match healthcheck_result {
-            Ok(result) => {
-                println!("Healthcheck command output:");
-                println!("{}", sql_engine::format_result_set(&result));
-            },
-            Err(err) => {
-                eprintln!("Error executing healthcheck command: {:?}", err);
-            }
-        }
-        
-        println!("✓ Database initialized successfully in non-interactive mode");
+    } 
+
+    
+    // 如果启用了JDBC服务，让程序继续运行，不要退出
+    if should_start_jdbc {
+        println!("\n--- JDBC server is running in background ---");
+        println!("Press Ctrl+C to stop the server");
+        tokio::signal::ctrl_c().await.unwrap();
+        println!("\nStopping JDBC server...");
     }
     
     // 程序退出前关闭PubSub系统

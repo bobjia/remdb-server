@@ -1,4 +1,4 @@
-package com.remdb.jdbc;
+package cn.totaltrust.remdb;
 
 import java.sql.*;
 import java.util.Properties;
@@ -23,15 +23,18 @@ public class RemDbDriver implements Driver {
         String host = "localhost";
         int port = 5432; // Default JDBC port
 
-        if (url.startsWith("jdbc:remdb://")) {
-            String urlPart = url.substring(12);
-            if (urlPart.contains(":")) {
-                String[] parts = urlPart.split(":");
-                host = parts[0];
-                port = Integer.parseInt(parts[1]);
-            } else {
-                host = urlPart;
-            }
+        // Simple URL parsing without regex
+        // "jdbc:remdb://" is 13 characters long
+        String urlPart = url.substring(13);
+        
+        // Get host and port
+        int colonIndex = urlPart.indexOf(":");
+        if (colonIndex != -1) {
+            host = urlPart.substring(0, colonIndex);
+            String portStr = urlPart.substring(colonIndex + 1);
+            port = Integer.parseInt(portStr);
+        } else {
+            host = urlPart;
         }
 
         String user = info.getProperty("user", "");

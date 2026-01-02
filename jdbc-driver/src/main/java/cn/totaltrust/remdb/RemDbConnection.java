@@ -1,4 +1,4 @@
-package com.remdb.jdbc;
+package cn.totaltrust.remdb;
 
 import java.sql.*;
 import java.util.*;
@@ -370,8 +370,12 @@ public class RemDbConnection implements Connection {
     String executeCommand(String command) throws SQLException {
         checkClosed();
         try {
+            // Set socket timeout to 15 seconds to prevent infinite blocking
+            socket.setSoTimeout(15000);
             writer.println(command);
             return reader.readLine();
+        } catch (java.net.SocketTimeoutException e) {
+            throw new SQLException("Command timed out. Is the RemDb server running?", e);
         } catch (IOException e) {
             throw new SQLException("Failed to execute command: " + e.getMessage(), e);
         }

@@ -1,4 +1,19 @@
 -- remdb数据库模式定义
+
+CREATE TABLE iotdevices (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,  
+    device_id TEXT,  
+    created_at BIGINT,  
+    temperature DOUBLE,  
+    humidity DOUBLE,  
+    pressure DOUBLE,  
+    battery_level INT
+);
+
+
+CREATE INDEX idx_iot_time ON iotdevices (created_at);
+
+
 -- 创建用户表
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,

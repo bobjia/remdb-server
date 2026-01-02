@@ -15,6 +15,9 @@ low_power_mode_supported = false
 # 低功耗模式下的最大记录数，默认None
 low_power_max_records = 10000
 
+# 单表的最大记录数（用于动态创建表）
+default_max_records = 10000
+
 # JDBC服务配置
 # 是否启用JDBC服务
 jdbc_enabled = true
@@ -22,6 +25,9 @@ jdbc_enabled = true
 jdbc_port = 6666
 # 最大允许的并发jdbc客户端连接数，默认5
 max_connections = 5
+
+# JDBC执行超时时间（秒），默认5秒
+jdbc_timeout = 5
 
 # 通过配置文件启用PubSub功能
 [pubsub]

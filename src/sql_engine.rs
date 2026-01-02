@@ -1,6 +1,7 @@
 use remdb::{RemDb, RemDbError, DdlExecutor};
 use thiserror::Error;
 use crate::debug_println;
+use crate::ddl_compiler::DdlError;
 
 #[derive(Error, Debug)]
 pub enum SqlError {
@@ -15,6 +16,12 @@ pub enum SqlError {
 impl From<RemDbError> for SqlError {
     fn from(err: RemDbError) -> Self {
         SqlError::Database(err)
+    }
+}
+
+impl From<DdlError> for SqlError {
+    fn from(err: DdlError) -> Self {
+        SqlError::Parsing(err.to_string())
     }
 }
 
@@ -329,15 +336,10 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
 /// 执行INSERT命令
 fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
-    // 直接执行原始SQL语句
-    db.sql_query(sql)?;
-    
-    // 对于INSERT语句，假设成功插入1行
-    Ok(ResultSet {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        affected_rows: 1,
-    })
+    // TODO: Implement proper INSERT handling
+    // Currently, the db.sql_query() method appears to hang on INSERT statements
+    // This is a temporary fix to prevent the server from hanging
+    Err(SqlError::Unsupported)
 }
 
 /// 解析INSERT语句的各个部分：表名、指定的列名、值
@@ -405,9 +407,14 @@ fn parse_insert_parts(sql: &str, after_insert: &str) -> std::result::Result<(Str
 
 /// 从SQL语句中提取表名
 fn extract_table_name(sql_lower: &str) -> std::result::Result<String, SqlError> {
-    // 查找"insert into"后的表名
-    let after_insert = sql_lower.strip_prefix("insert into ")
-        .ok_or(SqlError::Parsing("Not an INSERT statement".to_string()))?;
+    // 查找"insert"或"insert into"后的表名
+    let after_insert = if let Some(rest) = sql_lower.strip_prefix("insert into ") {
+        rest
+    } else if let Some(rest) = sql_lower.strip_prefix("insert ") {
+        rest
+    } else {
+        return Err(SqlError::Parsing("Not an INSERT statement".to_string()));
+    };
     
     // 查找表名结束位置（空格或左括号）
     let table_end = after_insert.find(|c: char| c.is_whitespace() || c == '(')
@@ -622,17 +629,34 @@ fn execute_delete(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 /// 执行CREATE TABLE命令
 fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
     // 输出完整的SQL语句，用于调试
-    debug_println!("Debug: Executing CREATE TABLE SQL: '{}'", sql);
+    println!("Debug: Executing CREATE TABLE SQL: '{}'", sql);
+    
+    // 尝试解析CREATE TABLE语句，验证语法
+    if let Err(err) = crate::ddl_compiler::parse_ddl_content(sql) {
+        println!("Debug: CREATE TABLE parsing failed: {:?}", err);
+        return Err(SqlError::from(err));
+    }
     
     // 使用sql_query方法执行CREATE TABLE语句
-    db.sql_query(sql)?;
+    let result = db.sql_query(sql);
     
-    // 返回成功结果，受影响行数为1
-    Ok(ResultSet {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        affected_rows: 1,
-    })
+    // 检查执行结果
+    match result {
+        Ok(_) => {
+            println!("CREATE TABLE executed successfully");
+            // 返回成功结果，受影响行数为1
+            Ok(ResultSet {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                affected_rows: 1,
+            })
+        },
+        Err(err) => {
+            println!("CREATE TABLE failed: {:?}", err);
+            println!("Debug: SQL statement: {}", sql);
+            Err(SqlError::from(err))
+        }
+    }
 }
 
 /// 执行CREATE INDEX命令
