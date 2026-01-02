@@ -259,7 +259,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 获取表定义
     let table = db.config.tables.iter()
         .find(|t| *t.name == *table_name)
-        .ok_or(SqlError::Database(remdb::RemDbError::TableNotFound))?;
+.ok_or(SqlError::Database(remdb::RemDbError::TableNotFound))?;
     
     // 构建完整的行数据
     let mut rows = Vec::new();
@@ -342,14 +342,33 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 调试：打印要执行的SQL语句
     debug_println!("Debug: Executing INSERT SQL: {}", sql);
     
-    // 直接使用RemDb的sql_query方法执行INSERT语句，避免手动解析和调用可能有问题的insert_record方法
+    let sql_lower = sql.trim().to_lowercase();
+    
+    // 检查INSERT语句是否包含id列
+    if !sql_lower.contains("(id") && !sql_lower.contains("id,") {
+        // 如果没有提供id，自动生成一个
+        let sql_with_pk = generate_auto_inc_sql(sql)?;
+        debug_println!("Debug: Generated INSERT with auto PK: {}", sql_with_pk);
+        
+        // 执行带自动生成主键的INSERT语句
+        let result = db.sql_query(&sql_with_pk)?;
+        
+        // 构造结果集
+        return Ok(ResultSet {
+            columns: result.columns,
+            rows: Vec::new(),
+            affected_rows: result.rows.len(),
+        });
+    }
+    
+    // 直接使用RemDb的sql_query方法执行INSERT语句
     let result = db.sql_query(sql)?;
     
     // 构造结果集
     Ok(ResultSet {
-        columns: Vec::new(),
+        columns: result.columns,
         rows: Vec::new(),
-        affected_rows: 1, // 假设插入成功，影响1行
+        affected_rows: result.rows.len(),
     })
 }
 
@@ -505,15 +524,27 @@ fn generate_auto_inc_sql(sql: &str) -> std::result::Result<String, SqlError> {
         .unwrap()
         .as_millis() as u64;
     
-    // 构建新的INSERT语句
-    let new_sql = format!(
-        "INSERT INTO {} (id, {}) VALUES ({}, {})
+    // 构建新的INSERT语句，处理没有指定列名的情况
+    let new_sql = if specified_columns.is_empty() {
+        // 没有指定列名时，直接在值列表前添加id值
+        format!(
+            "INSERT INTO {} VALUES ({}, {})
 ",
-        table_name,
-        specified_columns.join(", "),
-        new_pk,
-        values.join(", ")
-    );
+            table_name,
+            new_pk,
+            values.join(", ")
+        )
+    } else {
+        // 指定了列名时，添加id列和值
+        format!(
+            "INSERT INTO {} (id, {}) VALUES ({}, {})
+",
+            table_name,
+            specified_columns.join(", "),
+            new_pk,
+            values.join(", ")
+        )
+    };
     
     Ok(new_sql)
 }
@@ -860,7 +891,6 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
         },
         health_result.details.to_string()
     ]);
-    
     // 添加内存健康检查结果
     let metrics = health_result.metrics;
     let memory_usage = metrics.used_memory as f64 / metrics.total_memory as f64;

@@ -24,7 +24,7 @@ public class IotDeviceClient {
     }
     
     public void createIotTable() throws SQLException {
-        String createTableSQL = "CREATE TABLE iotdevices " +
+        String createTableSQL = "CREATE TABLE iot_devices " +
                                "(id INT AUTOINCREMENT PRIMARY KEY, " +
                                " device_id VARCHAR(50), " +
                                " created_at BIGINT, " +
@@ -38,8 +38,8 @@ public class IotDeviceClient {
     
     public void insertIotData(String deviceId, long timestamp, double temperature, 
                              double humidity, double pressure, int batteryLevel) throws SQLException {
-        String insertSQL = String.format("INSERT INTO iotdevices (device_id, created_at, temperature, humidity, pressure, battery_level) " +
-                                       "VALUES ('%s', %d, %.2f, %.2f, %.2f, %d)",
+        String insertSQL = String.format("INSERT INTO iot_devices (device_id, created_at, temperature, humidity, pressure, battery_level) " +
+                                       "VALUES (\"%s\", %d, %.2f, %.2f, %.2f, %d)",
                                        deviceId, timestamp, temperature, humidity, pressure, batteryLevel);
         int rowsInserted = stmt.executeUpdate(insertSQL);
         System.out.printf("Inserted %d row(s): Device=%s, Temp=%.2f°C, Humidity=%.2f%%, Pressure=%.2f hPa, Battery=%d%%\n",
@@ -47,7 +47,7 @@ public class IotDeviceClient {
     }
     
     public void queryIotData(int limit) throws SQLException {
-        String selectSQL = String.format("SELECT * FROM iotdevices ORDER BY created_at DESC LIMIT %d", limit);
+        String selectSQL = String.format("SELECT * FROM iot_devices ORDER BY created_at DESC LIMIT %d", limit);
         ResultSet rs = stmt.executeQuery(selectSQL);
         
         System.out.println("\nQuery results (latest " + limit + " records):");
@@ -70,13 +70,13 @@ public class IotDeviceClient {
     }
     
     public void updateIotData(int id, double temperature) throws SQLException {
-        String updateSQL = String.format("UPDATE iotdevices SET temperature = %.2f WHERE id = %d", temperature, id);
+        String updateSQL = String.format("UPDATE iot_devices SET temperature = %.2f WHERE id = %d", temperature, id);
         int rowsUpdated = stmt.executeUpdate(updateSQL);
         System.out.printf("Updated %d row(s) for ID %d\n", rowsUpdated, id);
     }
     
     public void deleteIotData(int id) throws SQLException {
-        String deleteSQL = String.format("DELETE FROM iotdevices WHERE id = %d", id);
+        String deleteSQL = String.format("DELETE FROM iot_devices WHERE id = %d", id);
         int rowsDeleted = stmt.executeUpdate(deleteSQL);
         System.out.printf("Deleted %d row(s) for ID %d\n", rowsDeleted, id);
     }
@@ -117,7 +117,7 @@ public class IotDeviceClient {
         try {
             client.initialize();
             
-            // client.createIotTable();
+            client.createIotTable();
             
             System.out.println("\n2. Inserting single record...");
             client.insertIotData("device-001", System.currentTimeMillis(), 25.5, 60.2, 1005.3, 85);

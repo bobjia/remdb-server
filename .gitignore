@@ -3,4 +3,5 @@
 snapshots/*
 /jdbc-driver/target/*
 *.log
+/vendor/*
 remdb_history.txt

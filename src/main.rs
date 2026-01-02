@@ -662,11 +662,12 @@ async fn main() {
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
     let db_arc = Arc::new(Mutex::new(db));
     
+    // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
+    let actual_jdbc_port = jdbc_port.unwrap_or(6666);
+    
     // 启动JDBC服务器（如果启用了JDBC服务且配置了端口，或者没有明确禁用）
     let should_start_jdbc = jdbc_enabled.unwrap_or(jdbc_port.is_some());
     if should_start_jdbc {
-        // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
-        let actual_jdbc_port = jdbc_port.unwrap_or(6666);
         let max_conns = max_connections.unwrap_or(5); // 默认最大连接数为5
         let jdbc_timeout = jdbc_timeout.unwrap_or(5); // 默认超时时间为5秒
         let jdbc_server = JdbcServer::new(db_arc.clone(), actual_jdbc_port, max_conns, jdbc_timeout);
@@ -720,19 +721,28 @@ async fn main() {
         }
     }
     
-    // 启动交互式控制台
+    // 启动交互式控制台（如果启用且不是非交互式模式）
     if !args.non_interactive {
-        let mut db_lock = db_arc.lock().await;
-        cli::run_cli(&mut db_lock);
-    } 
-
-    
-    // 如果启用了JDBC服务，让程序继续运行，不要退出
-    if should_start_jdbc {
-        println!("\n--- JDBC and PubSub server are running in background ---");
-        println!("Press Ctrl+C to stop the server");
-        tokio::signal::ctrl_c().await.unwrap();
-        println!("\nStopping JDBC server...");
+        // 只在非交互式模式下启动CLI，JDBC模式下不启动CLI
+        if !should_start_jdbc {
+            let mut db_lock = db_arc.lock().await;
+            cli::run_cli(&mut db_lock);
+        } else {
+            println!("\n--- JDBC server is running on port {} ---", actual_jdbc_port);
+            println!("Interactive CLI is disabled when JDBC server is running.");
+            println!("Use --non-interactive=false to enable CLI in non-JDBC mode.");
+            println!("Press Ctrl+C to stop the server");
+            tokio::signal::ctrl_c().await.unwrap();
+            println!("\nStopping JDBC server...");
+        }
+    } else {
+        // 非交互式模式下，如果启用了JDBC服务，等待Ctrl+C
+        if should_start_jdbc {
+            println!("\n--- JDBC server is running on port {} ---", actual_jdbc_port);
+            println!("Press Ctrl+C to stop the server");
+            tokio::signal::ctrl_c().await.unwrap();
+            println!("\nStopping JDBC server...");
+        }
     }
     
     // 程序退出前关闭PubSub系统
