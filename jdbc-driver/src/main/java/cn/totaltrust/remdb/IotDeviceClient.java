@@ -5,8 +5,8 @@ import java.util.Random;
 
 public class IotDeviceClient {
     private static final String URL = "jdbc:remdb://localhost:6666";
-    private static final String USER = "";
-    private static final String PASSWORD = "";
+    private static final String USER = "admin";
+    private static final String PASSWORD = "admin";
     
     private Connection conn;
     private Statement stmt;

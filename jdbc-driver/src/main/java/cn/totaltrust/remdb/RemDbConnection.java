@@ -17,6 +17,16 @@ public class RemDbConnection implements Connection {
             this.socket = new Socket(host, port);
             this.writer = new PrintWriter(socket.getOutputStream(), true);
             this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            
+            // Send AUTH command if username and password are provided
+            if (user != null && password != null) {
+                String authCommand = "AUTH|" + user + "|" + password;
+                writer.println(authCommand);
+                String response = reader.readLine();
+                if (response == null || response.startsWith("ERROR|")) {
+                    throw new SQLException("Authentication failed: " + (response != null ? response.substring(6) : "No response"));
+                }
+            }
         } catch (IOException e) {
             throw new SQLException("Failed to connect to RemDb server: " + e.getMessage(), e);
         }

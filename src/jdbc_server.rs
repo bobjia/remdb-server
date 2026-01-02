@@ -6,6 +6,8 @@ use tokio::time::{timeout, Duration};
 use remdb::RemDb;
 use crate::sql_engine::{execute_extended_sql, ResultSet};
 use crate::debug_println;
+use sha2::{Sha256, Digest};
+use hex;
 
 /// JDBC服务器
 pub struct JdbcServer {
@@ -13,16 +15,23 @@ pub struct JdbcServer {
     port: u16,
     max_connections: usize,
     timeout: u64,
+    /// 认证配置
+    auth_enabled: bool,
+    username: String,
+    password_hash: String,
 }
 
 impl JdbcServer {
     /// 创建新的JDBC服务器
-    pub fn new(db: Arc<Mutex<&'static mut RemDb>>, port: u16, max_connections: usize, timeout: u64) -> Self {
+    pub fn new(db: Arc<Mutex<&'static mut RemDb>>, port: u16, max_connections: usize, timeout: u64, auth_enabled: bool, username: String, password_hash: String) -> Self {
         Self {
             db,
             port,
             max_connections,
             timeout,
+            auth_enabled,
+            username,
+            password_hash,
         }
     }
 
@@ -45,12 +54,15 @@ impl JdbcServer {
 
             let db = self.db.clone();
             let conn_timeout = timeout;
+            let auth_enabled = self.auth_enabled;
+            let username = self.username.clone();
+            let password_hash = self.password_hash.clone();
 
             // 处理连接
             tokio::spawn(async move {
                 // 连接处理完成后释放许可
                 let _permit = permit;
-                if let Err(e) = Self::handle_connection(socket, db, conn_timeout).await {
+                if let Err(e) = Self::handle_connection(socket, db, conn_timeout, auth_enabled, username, password_hash).await {
                     println!("JDBC connection error: {:?}", e);
                 }
                 println!("JDBC connection closed: {}", addr);
@@ -59,12 +71,15 @@ impl JdbcServer {
     }
 
     /// 处理JDBC连接
-    async fn handle_connection(socket: tokio::net::TcpStream, db: Arc<Mutex<&'static mut RemDb>>, timeout: u64) -> std::io::Result<()> {
+    async fn handle_connection(socket: tokio::net::TcpStream, db: Arc<Mutex<&'static mut RemDb>>, timeout: u64, auth_enabled: bool, username: String, password_hash: String) -> std::io::Result<()> {
         println!("Handling new JDBC connection");
         // 分离TCP流的读写部分，避免可变借用冲突
         let (read_half, mut write_half) = tokio::io::split(socket);
         let mut reader = tokio::io::BufReader::new(read_half);
         let mut line = String::new();
+        
+        // 认证状态跟踪
+        let mut is_authenticated = !auth_enabled; // 如果未启用认证，则默认已认证
 
         loop {
             // 读取客户端请求（完整的一行）
@@ -78,7 +93,7 @@ impl JdbcServer {
             println!("JDBC request: {}", request);
 
             // 处理请求
-            let response = Self::process_request(request, db.clone(), timeout).await;
+            let response = Self::process_request(request, db.clone(), timeout, auth_enabled, &mut is_authenticated, &username, &password_hash).await;
             println!("JDBC response: {}", response);
 
             // 发送响应
@@ -92,7 +107,7 @@ impl JdbcServer {
     }
 
     /// 处理JDBC请求
-    async fn process_request(request: String, db: Arc<Mutex<&'static mut RemDb>>, timeout: u64) -> String {
+    async fn process_request(request: String, db: Arc<Mutex<&'static mut RemDb>>, timeout: u64, auth_enabled: bool, is_authenticated: &mut bool, username: &str, password_hash: &str) -> String {
         let parts: Vec<&str> = request.split('|').collect();
         if parts.is_empty() {
             return "ERROR|Invalid request format".to_string();
@@ -100,7 +115,27 @@ impl JdbcServer {
 
         let command = parts[0];
         match command {
+            "AUTH" => {
+                if parts.len() < 3 {
+                    return "ERROR|Missing username or password".to_string();
+                }
+                let provided_username = parts[1];
+                let provided_password = parts[2];
+                
+                // 验证用户名和密码
+                if Self::verify_credentials(provided_username, provided_password, username, password_hash) {
+                    *is_authenticated = true;
+                    "OK|Authentication successful".to_string()
+                } else {
+                    "ERROR|Authentication failed: Invalid username or password".to_string()
+                }
+            }
             "EXECUTE" => {
+                // 检查是否需要认证且已认证
+                if auth_enabled && !*is_authenticated {
+                    return "ERROR|Authentication required. Please send AUTH command first".to_string();
+                }
+                
                 if parts.len() < 2 {
                     return "ERROR|Missing SQL statement".to_string();
                 }
@@ -170,6 +205,25 @@ impl JdbcServer {
                 error_result
             }
         }
+    }
+
+    /// 验证用户名和密码
+    pub fn verify_credentials(provided_username: &str, provided_password: &str, expected_username: &str, expected_password_hash: &str) -> bool {
+        // 首先验证用户名
+        if provided_username != expected_username {
+            return false;
+        }
+        
+        // 计算提供的密码的SHA-256哈希值
+        let mut hasher = Sha256::new();
+        hasher.update(provided_password);
+        let provided_hash = hasher.finalize();
+        
+        // 将计算得到的哈希值转换为十六进制字符串
+        let provided_hash_str = hex::encode(provided_hash);
+        
+        // 比较哈希值
+        provided_hash_str == expected_password_hash
     }
 
     /// 格式化结果集

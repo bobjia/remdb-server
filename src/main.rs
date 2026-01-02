@@ -308,6 +308,14 @@ struct Config {
     /// JDBC执行超时时间（秒）
     jdbc_timeout: Option<u64>,
     
+    /// JDBC认证配置
+    /// 是否启用JDBC认证
+    jdbc_auth_enabled: Option<bool>,
+    /// JDBC认证用户名
+    jdbc_username: Option<String>,
+    /// JDBC认证密码哈希值
+    jdbc_password_hash: Option<String>,
+    
     /// pubsub配置
     pubsub: Option<PubSubConfig>,
     
@@ -404,6 +412,18 @@ struct Args {
     /// JDBC执行超时时间（秒）
     #[arg(long)]
     jdbc_timeout: Option<u64>,
+    
+    /// 是否启用JDBC认证
+    #[arg(long)]
+    jdbc_auth_enabled: Option<bool>,
+    
+    /// JDBC认证用户名
+    #[arg(long)]
+    jdbc_username: Option<String>,
+    
+    /// JDBC认证密码哈希值
+    #[arg(long)]
+    jdbc_password_hash: Option<String>,
     
     /// 是否启用pubsub功能
     #[arg(long)]
@@ -502,6 +522,11 @@ async fn main() {
     let jdbc_enabled = args.jdbc_enabled.or(config.jdbc_enabled);
     let max_connections = args.max_connections.or(config.max_connections);
     let jdbc_timeout = args.jdbc_timeout.or(config.jdbc_timeout);
+    
+    // 合并JDBC认证配置
+    let jdbc_auth_enabled = args.jdbc_auth_enabled.or(config.jdbc_auth_enabled);
+    let jdbc_username = args.jdbc_username.or(config.jdbc_username);
+    let jdbc_password_hash = args.jdbc_password_hash.or(config.jdbc_password_hash);
     
     // 合并pubsub配置
     let pubsub_enabled = args.pubsub_enabled.or(config.pubsub.as_ref().and_then(|p| p.enabled));
@@ -670,9 +695,24 @@ async fn main() {
     if should_start_jdbc {
         let max_conns = max_connections.unwrap_or(5); // 默认最大连接数为5
         let jdbc_timeout = jdbc_timeout.unwrap_or(5); // 默认超时时间为5秒
-        let jdbc_server = JdbcServer::new(db_arc.clone(), actual_jdbc_port, max_conns, jdbc_timeout);
+        
+        // JDBC认证配置默认值
+        let auth_enabled = jdbc_auth_enabled.unwrap_or(false);
+        let username = jdbc_username.unwrap_or_else(|| "admin".to_string());
+        let password_hash = jdbc_password_hash.unwrap_or_else(|| "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918".to_string());
+        
+        let jdbc_server = JdbcServer::new(
+            db_arc.clone(), 
+            actual_jdbc_port, 
+            max_conns, 
+            jdbc_timeout,
+            auth_enabled,
+            username,
+            password_hash
+        );
         
         println!("Starting JDBC server on port {} with max connections {} and timeout {} seconds", actual_jdbc_port, max_conns, jdbc_timeout);
+        println!("JDBC authentication: {}", if auth_enabled { "enabled" } else { "disabled" });
         
         // 在后台启动JDBC服务器
         tokio::spawn(async move {
