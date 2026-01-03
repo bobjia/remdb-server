@@ -306,16 +306,22 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 提取表名
     let table_name = extract_table_name(&sql_lower)?;
 
-    // 获取表定义 - 注意：动态创建的表不会出现在db.config.tables中，所以我们跳过这个检查
-    // 直接让db.sql_query处理表不存在的情况
+    // 检查是否是批量插入语句 (包含多个VALUES子句)
+    if sql_lower.contains(")(") {
+        // 处理批量插入
+        return execute_batch_insert(db, sql, &table_name, &sql_lower);
+    }
 
+    // 处理单条插入
     // 提取指定的列名
     let specified_columns = extract_columns(&sql_lower)?;
 
-    // 跳过NOT NULL列检查，因为动态创建的表不在db.config.tables中
-
-    // 检查INSERT语句是否包含id列
-    if !sql_lower.contains("(id") && !sql_lower.contains("id,") {
+    // 检查INSERT语句是否包含id列作为独立列名
+    let has_id_column = sql_lower.contains("(id") || 
+                        sql_lower.contains(", id") || 
+                        sql_lower.contains("id,") && !sql_lower.contains("device_id") && !sql_lower.contains("user_id") && !sql_lower.contains("group_id");
+    
+    if !has_id_column {
         // 如果没有提供id，自动生成一个
         let sql_with_pk = generate_auto_inc_sql(sql)?;
         debug_println!("Debug: Generated INSERT with auto PK: {}", sql_with_pk);
@@ -340,6 +346,199 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
         rows: Vec::new(),
         affected_rows: result.rows.len(),
     })
+}
+
+/// 执行批量INSERT命令
+fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 提取指定的列名
+    let specified_columns = extract_columns(sql_lower)?;
+    
+    // 提取所有值组
+    let values_list = extract_batch_values(sql)?;
+    
+    // 检查是否需要自动生成id
+       let needs_auto_id = !sql_lower.contains("(id") && 
+                           !sql_lower.contains(", id") && 
+                           !(sql_lower.contains("id,") && !sql_lower.contains("device_id") && !sql_lower.contains("user_id") && !sql_lower.contains("group_id"));
+    
+    if needs_auto_id {
+        // 需要自动生成id，为每个值组生成完整的INSERT语句
+        let mut total_affected = 0;
+        
+        for values in values_list {
+            // 为每条记录生成自动id
+            let sql_with_pk = generate_auto_inc_sql_for_batch(sql, &values)?;
+            let result = db.sql_query(&sql_with_pk)?;
+            total_affected += result.rows.len();
+        }
+        
+        // 构造结果集
+        return Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: total_affected,
+        });
+    } else {
+        // 不需要自动生成id，使用batch_insert_record方法
+        // 转换列名为&str数组
+        let column_refs: Vec<&str> = specified_columns.iter().map(|col| col.as_str()).collect();
+        
+        // 由于生命周期问题，我们直接在循环中构建并执行批量插入
+        // 或者，我们可以将所有值转换为字符串，然后构建完整的SQL语句
+        // 这里我们选择将批量插入拆分为单条插入，因为batch_insert_record的生命周期要求较高
+        let mut total_affected = 0;
+        for values in values_list {
+            // 为每条记录构建INSERT语句
+            let insert_sql = format!(
+                "INSERT INTO {} ({}) VALUES ({})
+",
+                table_name,
+                specified_columns.join(", "),
+                values.join(", ")
+            );
+            let result = db.sql_query(&insert_sql)?;
+            total_affected += result.rows.len();
+        }
+        
+        let affected_rows = total_affected;
+        
+        // 构造结果集
+        Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows,
+        })
+    }
+}
+
+/// 从批量INSERT语句中提取所有值组
+fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlError> {
+    let sql_lower = sql.trim().to_lowercase();
+    
+    // 查找VALUES关键字
+    let values_pos = sql_lower
+        .find("values")
+        .ok_or(SqlError::Parsing("Missing VALUES keyword".to_string()))?;
+    
+    // 提取VALUES部分
+    let values_part = &sql[values_pos + 6..].trim();
+    
+    // 解析多个值组，格式为 (value1, value2, ...), (value1, value2, ...), ...
+    let mut result = Vec::new();
+    let mut current_group = Vec::new();
+    let mut in_group = false;
+    let mut in_quotes = false;
+    let mut quote_char = '\0';
+    let mut current_value = String::new();
+    let mut bracket_depth = 0;
+    
+    for c in values_part.chars() {
+        match c {
+            '"' | '\'' => {
+                if !in_quotes {
+                    in_quotes = true;
+                    quote_char = c;
+                    current_value.push(c);
+                } else if c == quote_char {
+                    in_quotes = false;
+                    quote_char = '\0';
+                    current_value.push(c);
+                } else {
+                    current_value.push(c);
+                }
+            },
+            '(' => {
+                if !in_quotes {
+                    bracket_depth += 1;
+                    if bracket_depth == 1 {
+                        in_group = true;
+                        current_value.clear();
+                    } else {
+                        current_value.push(c);
+                    }
+                } else {
+                    current_value.push(c);
+                }
+            },
+            ')' => {
+                if !in_quotes {
+                    bracket_depth -= 1;
+                    if bracket_depth == 0 {
+                        in_group = false;
+                        // 处理当前值
+                        if !current_value.trim().is_empty() {
+                            current_group.push(current_value.trim().to_string());
+                        }
+                        // 添加当前组到结果
+                        result.push(current_group);
+                        current_group = Vec::new();
+                        current_value.clear();
+                    } else {
+                        current_value.push(c);
+                    }
+                } else {
+                    current_value.push(c);
+                }
+            },
+            ',' => {
+                if !in_quotes && in_group && bracket_depth == 1 {
+                    // 值分隔符
+                    current_group.push(current_value.trim().to_string());
+                    current_value.clear();
+                } else {
+                    current_value.push(c);
+                }
+            },
+            ';' => {
+                // SQL语句结束，忽略
+                break;
+            },
+            _ => {
+                if in_group {
+                    current_value.push(c);
+                }
+            },
+        }
+    }
+    
+    Ok(result)
+}
+
+/// 为批量插入生成带有自动递增主键的SQL语句
+fn generate_auto_inc_sql_for_batch(sql: &str, values: &Vec<String>) -> std::result::Result<String, SqlError> {
+    let sql_lower = sql.trim().to_lowercase();
+    
+    // 提取表名
+    let table_name = extract_table_name(&sql_lower)?;
+    
+    // 提取列名
+    let specified_columns = extract_columns(&sql_lower)?;
+    
+    // 生成唯一主键值：使用随机32位整数，确保在INT范围内
+    let new_pk = rand::random::<u32>() as u64;
+    
+    // 构建新的INSERT语句
+    let new_sql = if specified_columns.is_empty() {
+        // 没有指定列名时，直接在值列表前添加id值
+        format!(
+            "INSERT INTO {} VALUES ({}, {})",
+            table_name,
+            new_pk,
+            values.join(", ")
+        )
+    } else {
+        // 指定了列名时，添加id列和值
+        format!(
+            "INSERT INTO {} (id, {}) VALUES ({}, {})
+",
+            table_name,
+            specified_columns.join(", "),
+            new_pk,
+            values.join(", ")
+        )
+    };
+    
+    Ok(new_sql)
 }
 
 /// 解析INSERT语句的各个部分：表名、指定的列名、值
@@ -507,18 +706,14 @@ fn generate_auto_inc_sql(sql: &str) -> std::result::Result<String, SqlError> {
     let specified_columns = extract_columns(&sql_lower)?;
     let values = extract_values(&sql_lower)?;
 
-    // 生成随机主键值（简单实现）
-    let new_pk = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
+    // 生成唯一主键值：使用随机32位整数，确保在INT范围内
+    let new_pk = rand::random::<u32>() as u64;
 
     // 构建新的INSERT语句，处理没有指定列名的情况
     let new_sql = if specified_columns.is_empty() {
         // 没有指定列名时，直接在值列表前添加id值
         format!(
-            "INSERT INTO {} VALUES ({}, {})
-",
+            "INSERT INTO {} VALUES ({}, {})",
             table_name,
             new_pk,
             values.join(", ")
@@ -526,8 +721,7 @@ fn generate_auto_inc_sql(sql: &str) -> std::result::Result<String, SqlError> {
     } else {
         // 指定了列名时，添加id列和值
         format!(
-            "INSERT INTO {} (id, {}) VALUES ({}, {})
-",
+            "INSERT INTO {} (id, {}) VALUES ({}, {})",
             table_name,
             specified_columns.join(", "),
             new_pk,

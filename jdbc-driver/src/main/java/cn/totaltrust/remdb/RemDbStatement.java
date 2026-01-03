@@ -8,6 +8,7 @@ public class RemDbStatement implements Statement {
     private RemDbConnection connection;
     private boolean closed = false;
     private RemDbResultSet currentResultSet = null;
+    private List<String> batchSqls = new ArrayList<>();
 
     public RemDbStatement(RemDbConnection connection) {
         this.connection = connection;
@@ -175,19 +176,242 @@ public class RemDbStatement implements Statement {
     @Override
     public void addBatch(String sql) throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("Batches not supported");
+        batchSqls.add(sql);
     }
 
     @Override
     public void clearBatch() throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("Batches not supported");
+        batchSqls.clear();
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("Batches not supported");
+        
+        if (batchSqls.isEmpty()) {
+            return new int[0];
+        }
+        
+        // 处理批量SQL
+        int[] result = new int[batchSqls.size()];
+        
+        // 如果所有SQL都是INSERT语句，尝试合并为批量INSERT
+        boolean allInserts = true;
+        String firstSql = batchSqls.get(0);
+        String tableName = null;
+        List<String> columns = null;
+        List<List<String>> allValues = new ArrayList<>();
+        
+        // 检查是否所有SQL都是INSERT语句，并且结构相同
+        for (int i = 0; i < batchSqls.size(); i++) {
+            String sql = batchSqls.get(i);
+            String lowerSql = sql.trim().toLowerCase();
+            
+            if (!lowerSql.startsWith("insert into ")) {
+                allInserts = false;
+                break;
+            }
+            
+            // 解析表名和列名
+            if (i == 0) {
+                // 解析第一个INSERT语句
+                tableName = extractTableName(lowerSql);
+                columns = extractColumns(sql);
+            } else {
+                // 检查后续INSERT语句的表名和列名是否与第一个相同
+                String currentTableName = extractTableName(lowerSql);
+                List<String> currentColumns = extractColumns(sql);
+                
+                if (!currentTableName.equals(tableName) || !currentColumns.equals(columns)) {
+                    allInserts = false;
+                    break;
+                }
+            }
+            
+            // 提取值
+            List<String> values = extractValues(sql);
+            allValues.add(values);
+        }
+        
+        if (allInserts && !batchSqls.isEmpty()) {
+            // 合并为批量INSERT语句
+            String batchInsertSql = buildBatchInsertSql(firstSql, columns, allValues);
+            String response = connection.executeCommand("EXECUTE|" + batchInsertSql);
+            int affectedRows = parseUpdateCount(response);
+            
+            // 对于批量INSERT，返回每个操作的影响行数
+            for (int i = 0; i < result.length; i++) {
+                result[i] = affectedRows / result.length;
+            }
+        } else {
+            // 逐个执行SQL
+            for (int i = 0; i < batchSqls.size(); i++) {
+                String sql = batchSqls.get(i);
+                String response = connection.executeCommand("EXECUTE|" + sql);
+                result[i] = parseUpdateCount(response);
+            }
+        }
+        
+        // 清空批处理列表
+        clearBatch();
+        
+        return result;
+    }
+    
+    private String extractTableName(String lowerSql) {
+        // 从 INSERT INTO table_name 中提取表名
+        int start = "insert into ".length();
+        int end = lowerSql.indexOf('(', start);
+        if (end == -1) {
+            end = lowerSql.indexOf(' ', start + 1);
+            if (end == -1) {
+                end = lowerSql.length();
+            }
+        }
+        return lowerSql.substring(start, end).trim();
+    }
+    
+    private List<String> extractColumns(String sql) {
+        List<String> columns = new ArrayList<>();
+        int openParen = sql.indexOf('(');
+        if (openParen == -1) {
+            return columns;
+        }
+        
+        int closeParen = sql.indexOf(')', openParen);
+        if (closeParen == -1) {
+            return columns;
+        }
+        
+        String columnsPart = sql.substring(openParen + 1, closeParen).trim();
+        if (columnsPart.isEmpty()) {
+            return columns;
+        }
+        
+        // 检查是否是VALUES前的列名列表
+        int valuesPos = sql.indexOf("VALUES", closeParen);
+        if (valuesPos == -1) {
+            valuesPos = sql.indexOf("values", closeParen);
+        }
+        
+        if (valuesPos == -1) {
+            return columns;
+        }
+        
+        String[] columnArray = columnsPart.split(",");
+        for (String col : columnArray) {
+            columns.add(col.trim());
+        }
+        
+        return columns;
+    }
+    
+    private List<String> extractValues(String sql) {
+        List<String> values = new ArrayList<>();
+        
+        // 查找VALUES关键字
+        int valuesPos = sql.indexOf("VALUES");
+        if (valuesPos == -1) {
+            valuesPos = sql.indexOf("values");
+        }
+        
+        if (valuesPos == -1) {
+            return values;
+        }
+        
+        valuesPos += 6; // 跳过VALUES关键字
+        
+        // 查找值列表的开始和结束位置
+        int openParen = sql.indexOf('(', valuesPos);
+        if (openParen == -1) {
+            return values;
+        }
+        
+        int closeParen = sql.indexOf(')', openParen);
+        if (closeParen == -1) {
+            return values;
+        }
+        
+        String valuesPart = sql.substring(openParen + 1, closeParen).trim();
+        if (valuesPart.isEmpty()) {
+            return values;
+        }
+        
+        // 解析值列表，处理引号内的逗号
+        boolean inQuotes = false;
+        char quoteChar = '\0';
+        StringBuilder currentValue = new StringBuilder();
+        
+        for (char c : valuesPart.toCharArray()) {
+            if (c == '"' || c == '\'') {
+                if (!inQuotes) {
+                    inQuotes = true;
+                    quoteChar = c;
+                    currentValue.append(c);
+                } else if (c == quoteChar) {
+                    inQuotes = false;
+                    quoteChar = '\0';
+                    currentValue.append(c);
+                } else {
+                    currentValue.append(c);
+                }
+            } else if (c == ',' && !inQuotes) {
+                values.add(currentValue.toString().trim());
+                currentValue.setLength(0);
+            } else {
+                currentValue.append(c);
+            }
+        }
+        
+        if (currentValue.length() > 0) {
+            values.add(currentValue.toString().trim());
+        }
+        
+        return values;
+    }
+    
+    private String buildBatchInsertSql(String firstSql, List<String> columns, List<List<String>> allValues) {
+        StringBuilder sql = new StringBuilder();
+        
+        // 提取INSERT INTO table_name部分
+        int openParen = firstSql.indexOf('(');
+        if (openParen == -1) {
+            return firstSql; // 无法解析，返回原SQL
+        }
+        
+        sql.append(firstSql.substring(0, openParen + 1));
+        
+        // 添加列名
+        if (!columns.isEmpty()) {
+            for (int i = 0; i < columns.size(); i++) {
+                if (i > 0) {
+                    sql.append(", ");
+                }
+                sql.append(columns.get(i));
+            }
+        }
+        
+        sql.append(") VALUES ");
+        
+        // 添加所有值组
+        for (int i = 0; i < allValues.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
+            }
+            
+            sql.append("(");
+            List<String> values = allValues.get(i);
+            for (int j = 0; j < values.size(); j++) {
+                if (j > 0) {
+                    sql.append(", ");
+                }
+                sql.append(values.get(j));
+            }
+            sql.append(")");
+        }
+        
+        return sql.toString();
     }
 
     @Override

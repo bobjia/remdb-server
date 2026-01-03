@@ -21,7 +21,7 @@ public class RemDbDriver implements Driver {
 
         // Parse URL: jdbc:remdb://host:port
         String host = "localhost";
-        int port = 5432; // Default JDBC port
+        int port = 6666; // Default JDBC port
 
         // Simple URL parsing without regex
         // "jdbc:remdb://" is 13 characters long

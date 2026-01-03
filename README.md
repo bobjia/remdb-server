@@ -41,7 +41,7 @@ remdb-server 是一个基于 remdb 库构建的轻量级数据库服务器，支
 3. 执行构建命令
 
 ```bash
-git clone <repository-url>
+git clone https://gitee.com/totaltrust/remdb-server
 cd remdb-server
 cargo build --release
 ```

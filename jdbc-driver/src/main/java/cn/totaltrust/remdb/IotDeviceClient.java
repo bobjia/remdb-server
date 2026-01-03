@@ -105,6 +105,80 @@ public class IotDeviceClient {
         System.out.printf("\nContinuous write completed. Total records written: %d\n", count);
     }
     
+    public void batchInsertIotData() throws SQLException {
+        System.out.println("\n=== Starting Statement Batch Insert Test ===");
+        long startTime = System.currentTimeMillis();
+        
+        // 使用Statement进行批量插入
+        stmt.clearBatch();
+        
+        // 准备100条测试数据
+        for (int i = 0; i < 100; i++) {
+            String deviceId = "device-batch-" + i;
+            long timestamp = System.currentTimeMillis();
+            double temperature = 20.0 + (Math.random() * 15.0);
+            double humidity = 40.0 + (Math.random() * 30.0);
+            double pressure = 990.0 + (Math.random() * 20.0);
+            int batteryLevel = 60 + (int)(Math.random() * 40);
+            
+            String insertSQL = String.format(
+                "INSERT INTO iot_devices (device_id, created_at, temperature, humidity, pressure, battery_level) " +
+                "VALUES (\"%s\", %d, %.2f, %.2f, %.2f, %d)",
+                deviceId, timestamp, temperature, humidity, pressure, batteryLevel
+            );
+            
+            stmt.addBatch(insertSQL);
+        }
+        
+        // 执行批量插入
+        int[] results = stmt.executeBatch();
+        long endTime = System.currentTimeMillis();
+        
+        System.out.printf("Statement Batch Insert completed. Inserted %d records in %d ms\n", 
+                         results.length, endTime - startTime);
+        System.out.println("=== Statement Batch Insert Test Complete ===");
+    }
+    
+    public void batchInsertPreparedStatement() throws SQLException {
+        System.out.println("\n=== Starting PreparedStatement Batch Insert Test ===");
+        long startTime = System.currentTimeMillis();
+        
+        // 使用PreparedStatement进行批量插入
+        String insertSQL = "INSERT INTO iot_devices (device_id, created_at, temperature, humidity, pressure, battery_level) " +
+                          "VALUES (?, ?, ?, ?, ?, ?)";
+        
+        PreparedStatement pstmt = conn.prepareStatement(insertSQL);
+        
+        // 准备100条测试数据
+        for (int i = 0; i < 100; i++) {
+            String deviceId = "device-pbatch-" + i;
+            long timestamp = System.currentTimeMillis();
+            double temperature = 20.0 + (Math.random() * 15.0);
+            double humidity = 40.0 + (Math.random() * 30.0);
+            double pressure = 990.0 + (Math.random() * 20.0);
+            int batteryLevel = 60 + (int)(Math.random() * 40);
+            
+            pstmt.setString(1, deviceId);
+            pstmt.setLong(2, timestamp);
+            pstmt.setDouble(3, temperature);
+            pstmt.setDouble(4, humidity);
+            pstmt.setDouble(5, pressure);
+            pstmt.setInt(6, batteryLevel);
+            
+            pstmt.addBatch();
+        }
+        
+        // 执行批量插入
+        int[] results = pstmt.executeBatch();
+        long endTime = System.currentTimeMillis();
+        
+        System.out.printf("PreparedStatement Batch Insert completed. Inserted %d records in %d ms\n", 
+                         results.length, endTime - startTime);
+        System.out.println("=== PreparedStatement Batch Insert Test Complete ===");
+        
+        pstmt.close();
+    }
+    
     public void close() throws SQLException {
         if (stmt != null) stmt.close();
         if (conn != null) conn.close();
@@ -137,7 +211,13 @@ public class IotDeviceClient {
             System.out.println("\n7. High frequency write test (1 record/10ms for 2 seconds)...");
             client.continuousWrite("device-001", 10, 2);
             
-            System.out.println("\n8. Final query (latest 10 records)...");
+            System.out.println("\n8. Batch Insert Test with Statement...");
+            client.batchInsertIotData();
+            
+            System.out.println("\n9. Batch Insert Test with PreparedStatement...");
+            client.batchInsertPreparedStatement();
+            
+            System.out.println("\n10. Final query (latest 10 records)...");
             client.queryIotData(10);
             
         } catch (SQLException e) {

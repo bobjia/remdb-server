@@ -700,9 +700,9 @@ dependencies = [
 
 [[package]]
 name = "remdb"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecf45deac0e30d88c62b84addbb6d717ec5d969b3ea169b66add8b1827646a32"
+checksum = "f3211eb5f6906b6c8f8945f06d736b97540753797a616ec99948c32e640e18c7"
 dependencies = [
  "cc",
  "rand",
@@ -711,9 +711,9 @@ dependencies = [
 
 [[package]]
 name = "remdb-macros"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf99d11cbb0e993c113a1e639c3d61095ba8bcdcfa7f09a7f05b892a249e4a03"
+checksum = "1ca338a91b8a48bc6e57705fecf13bcfcc205bdc788d8930561cb9d6b512e440"
 dependencies = [
  "proc-macro2",
  "quote",

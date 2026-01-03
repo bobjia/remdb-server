@@ -4,9 +4,9 @@ import java.sql.*;
 
 public class RemDbJdbcExample {
     public static void main(String[] args) {
-        String url = "jdbc:remdb://localhost:5432";
-        String user = "";
-        String password = "";
+        String url = "jdbc:remdb://localhost:6666";
+        String user = "admin";
+        String password = "admin";
 
         Connection conn = null;
         Statement stmt = null;

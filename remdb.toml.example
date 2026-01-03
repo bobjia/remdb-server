@@ -33,7 +33,7 @@ jdbc_timeout = 5
 # 是否启用JDBC认证
 jdbc_auth_enabled = true
 # JDBC认证用户名
-jdbc_username = "admin"
+jdbc_username = "root"
 # JDBC认证密码（SHA-256哈希值）
 jdbc_password_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 

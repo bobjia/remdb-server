@@ -11,11 +11,11 @@ struct Cli {
     host: String,
 
     /// JDBC server port
-    #[arg(short, long, default_value = "54321")]
+    #[arg(short, long, default_value = "6666")]
     port: u16,
 
     /// Username for authentication
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "root")]
     username: Option<String>,
 
     /// Password for authentication

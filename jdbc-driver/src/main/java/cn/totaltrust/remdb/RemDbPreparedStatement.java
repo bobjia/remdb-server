@@ -8,6 +8,7 @@ public class RemDbPreparedStatement implements PreparedStatement {
     private RemDbConnection connection;
     private String sql;
     private List<Object> parameters;
+    private List<List<Object>> batchParameters;
     private boolean closed = false;
     private RemDbResultSet currentResultSet = null;
 
@@ -15,6 +16,7 @@ public class RemDbPreparedStatement implements PreparedStatement {
         this.connection = connection;
         this.sql = sql;
         this.parameters = new ArrayList<>();
+        this.batchParameters = new ArrayList<>();
     }
 
     @Override
@@ -179,19 +181,119 @@ public class RemDbPreparedStatement implements PreparedStatement {
     @Override
     public void addBatch() throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("addBatch not supported");
+        // 保存当前参数到批处理列表
+        List<Object> batchParam = new ArrayList<>(parameters);
+        batchParameters.add(batchParam);
+        // 清空当前参数，准备下一批
+        parameters.clear();
     }
 
     @Override
     public void clearBatch() throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("clearBatch not supported");
+        batchParameters.clear();
     }
 
     @Override
     public int[] executeBatch() throws SQLException {
         checkClosed();
-        throw new SQLFeatureNotSupportedException("executeBatch not supported");
+        
+        if (batchParameters.isEmpty()) {
+            return new int[0];
+        }
+        
+        // 处理批量参数
+        int[] result = new int[batchParameters.size()];
+        
+        // 如果是INSERT语句，尝试合并为批量INSERT
+        String lowerSql = sql.trim().toLowerCase();
+        boolean isInsert = lowerSql.startsWith("insert into ");
+        
+        if (isInsert) {
+            // 构建批量INSERT语句
+            String batchInsertSql = buildBatchInsertSql();
+            String response = connection.executeCommand("EXECUTE|" + batchInsertSql);
+            int affectedRows = parseUpdateCount(response);
+            
+            // 对于批量INSERT，返回每个操作的影响行数
+            for (int i = 0; i < result.length; i++) {
+                result[i] = affectedRows / result.length;
+            }
+        } else {
+            // 逐个执行SQL
+            for (int i = 0; i < batchParameters.size(); i++) {
+                // 设置当前参数
+                parameters = new ArrayList<>(batchParameters.get(i));
+                // 替换参数并执行
+                String finalSql = replaceParameters();
+                String response = connection.executeCommand("EXECUTE|" + finalSql);
+                result[i] = parseUpdateCount(response);
+            }
+        }
+        
+        // 清空批处理列表
+        clearBatch();
+        
+        return result;
+    }
+    
+    private String buildBatchInsertSql() {
+        // 解析原始INSERT语句
+        String[] parts = sql.split("\\?");
+        StringBuilder columnPart = new StringBuilder();
+        StringBuilder valuePart = new StringBuilder();
+        
+        // 提取列名部分
+        int openParen = sql.indexOf('(');
+        int closeParen = sql.indexOf(')', openParen);
+        if (openParen != -1 && closeParen != -1) {
+            columnPart.append(sql.substring(0, closeParen + 1));
+        } else {
+            // 没有列名，直接使用原始语句的前半部分
+            int valuesPos = sql.indexOf("VALUES");
+            if (valuesPos == -1) {
+                valuesPos = sql.indexOf("values");
+            }
+            if (valuesPos != -1) {
+                columnPart.append(sql.substring(0, valuesPos));
+            } else {
+                columnPart.append(sql);
+            }
+        }
+        
+        columnPart.append(" VALUES ");
+        
+        // 构建所有值组
+        for (int i = 0; i < batchParameters.size(); i++) {
+            if (i > 0) {
+                valuePart.append(", ");
+            }
+            
+            valuePart.append("(");
+            List<Object> params = batchParameters.get(i);
+            for (int j = 0; j < params.size(); j++) {
+                if (j > 0) {
+                    valuePart.append(", ");
+                }
+                
+                Object param = params.get(j);
+                if (param == null) {
+                    valuePart.append("NULL");
+                } else if (param instanceof String) {
+                    // 转义字符串中的单引号
+                    String strVal = (String) param;
+                    strVal = strVal.replace("'", "''");
+                    valuePart.append("'").append(strVal).append("'");
+                } else if (param instanceof Boolean) {
+                    valuePart.append(((Boolean) param) ? 1 : 0);
+                } else {
+                    valuePart.append(param.toString());
+                }
+            }
+            valuePart.append(")");
+        }
+        
+        return columnPart.toString() + valuePart.toString();
     }
 
     @Override
