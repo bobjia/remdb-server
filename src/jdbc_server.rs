@@ -1,13 +1,12 @@
-use crate::debug_println;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
 use hex;
 use remdb::RemDb;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
 
 /// JDBC服务器
 pub struct JdbcServer {
@@ -57,7 +56,7 @@ impl JdbcServer {
         loop {
             // 等待连接，获取信号量许可
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let (mut socket, addr) = listener.accept().await?;
+            let (socket, addr) = listener.accept().await?;
             println!("New JDBC connection from {}", addr);
 
             let db = self.db.clone();

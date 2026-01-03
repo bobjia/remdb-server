@@ -7,7 +7,6 @@ use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{Config, Editor};
 use std::env;
-use std::time::SystemTime;
 
 /// 运行交互式命令行界面
 pub fn run_cli(db: &mut RemDb) {

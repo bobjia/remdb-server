@@ -1,7 +1,4 @@
-use remdb::{
-    RemDb, Result as RemResult,
-    types::{DataType, FieldDef, TableDef},
-};
+use remdb::types::{DataType, FieldDef, TableDef};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
