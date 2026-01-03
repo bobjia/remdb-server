@@ -5,3 +5,4 @@ snapshots/*
 *.log
 /vendor/*
 remdb_history.txt
+remdb/*

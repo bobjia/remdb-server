@@ -680,13 +680,14 @@ async fn main() {
         log_prealloc_size: 4 * 1024 * 1024,      // 默认4MB
         log_segment_size: 16 * 1024 * 1024,      // 默认16MB
         retained_checkpoints: 3,                 // 默认保留3个检查点
-        ha_role,
-        replication_mode,
+        ha_role,                                 // HA角色
+        replication_mode,                        // 复制模式
         heartbeat_interval_ms: ha_heartbeat_interval.unwrap_or(1000), // 默认1秒心跳
         failure_detection_ms: ha_failure_detection_ms.unwrap_or(5000), // 默认5秒故障检测
         sync_timeout_ms: ha_sync_timeout_ms.unwrap_or(2000),          // 默认2秒同步超时
-        master_address,
-        master_port: ha_master_port,
+        master_address: master_address,          // 主节点地址
+        master_port: ha_master_port,             // 主节点端口
+        time_series_defaults: remdb::TimeSeriesConfig::DEFAULT // 时序数据默认配置
     }));
 
     // 初始化全局内存分配器，这是关键的一步！
@@ -744,8 +745,8 @@ async fn main() {
     // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
     let actual_jdbc_port = jdbc_port.unwrap_or(6666);
 
-    // 启动JDBC服务器（如果启用了JDBC服务且配置了端口，或者没有明确禁用）
-    let should_start_jdbc = jdbc_enabled.unwrap_or(jdbc_port.is_some());
+    // 启动JDBC服务器（默认启用）
+    let should_start_jdbc = jdbc_enabled.unwrap_or(true);
     if should_start_jdbc {
         let max_conns = max_connections.unwrap_or(5); // 默认最大连接数为5
         let jdbc_timeout = jdbc_timeout.unwrap_or(5); // 默认超时时间为5秒

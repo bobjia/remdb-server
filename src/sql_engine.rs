@@ -85,6 +85,11 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
         return execute_create_table(db, sql);
     }
 
+    // 处理CREATE TIMESERIES TABLE命令
+    if sql_lower.starts_with("create timeseries table ") {
+        return execute_create_time_series_table(db, sql);
+    }
+
     // 处理CREATE INDEX命令
     if sql_lower.starts_with("create index ") {
         return execute_create_index(db, sql);
@@ -150,7 +155,7 @@ fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
     let mut rows = Vec::new();
     let mut affected_rows = 0;
     
-    // 遍历所有可能的表ID
+    // 遍历所有普通表
     let mut table_id = 0;
     loop {
         match db.get_table(table_id) {
@@ -161,7 +166,24 @@ fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
                 table_id += 1;
             },
             Err(_) => {
-                // 没有更多的表了，退出循环
+                // 没有更多的普通表了，退出循环
+                break;
+            }
+        }
+    }
+    
+    // 遍历所有时序表
+    let mut ts_table_id = 0;
+    loop {
+        match db.get_time_series_table(ts_table_id) {
+            Ok(ts_table) => {
+                // 添加时序表名到结果集
+                rows.push(vec![ts_table.def.base.name.to_string()]);
+                affected_rows += 1;
+                ts_table_id += 1;
+            },
+            Err(_) => {
+                // 没有更多的时序表了，退出循环
                 break;
             }
         }
@@ -1010,6 +1032,136 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 
     // 调用 RemDb::create_table 方法创建表
     db.create_table(&table_name, &fields, primary_key_index)?;
+
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: 0,
+    })
+}
+
+/// 执行CREATE TIMESERIES TABLE命令
+fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing CREATE TIMESERIES TABLE SQL: {}", sql);
+
+    let sql_lower = sql.trim().to_lowercase();
+
+    // 查找表名和字段定义开始位置
+    let after_create = sql_lower
+        .strip_prefix("create timeseries table ")
+        .ok_or(SqlError::Parsing(
+            "Not a CREATE TIMESERIES TABLE statement".to_string(),
+        ))?;
+    let table_name_end = after_create
+        .find(|c: char| c.is_whitespace() || c == '(')
+        .unwrap_or(after_create.len());
+    let table_name = after_create[..table_name_end].trim().to_string();
+
+    // 查找字段定义的开始和结束位置
+    let fields_start = sql.find('(').ok_or(SqlError::Parsing(
+        "Missing opening parenthesis for fields".to_string(),
+    ))?;
+    let fields_end = sql.rfind(')').ok_or(SqlError::Parsing(
+        "Missing closing parenthesis for fields".to_string(),
+    ))?;
+
+    // 提取字段定义部分
+    let fields_part = &sql[fields_start + 1..fields_end].trim();
+
+    // 解析字段定义
+    let mut fields = Vec::new();
+    let mut time_field = None;
+    let mut value_field = None;
+    let mut tag_fields = Vec::new();
+
+    // 按逗号分割字段定义，但跳过括号内的逗号
+    let mut bracket_count = 0;
+    let mut field_start = 0;
+
+    for (i, c) in fields_part.char_indices() {
+        match c {
+            '(' => bracket_count += 1,
+            ')' => bracket_count -= 1,
+            ',' => {
+                if bracket_count == 0 {
+                    // 提取字段定义
+                    let field_def = &fields_part[field_start..i].trim();
+                    if !field_def.is_empty() {
+                        // 解析字段定义
+                        let field_parts: Vec<&str> = field_def.split_whitespace().collect();
+                        if field_parts.len() >= 2 {
+                            let field_name = field_parts[0];
+                            let data_type_str = field_parts[1].to_uppercase();
+
+                            // 检查是否为时间字段
+                            if data_type_str == "TIMESTAMP" {
+                                time_field = Some(field_name.to_string());
+                            }
+                            // 检查是否为值字段
+                            else if data_type_str == "FLOAT64" || data_type_str == "FLOAT" || data_type_str == "DOUBLE" {
+                                value_field = Some(field_name.to_string());
+                            }
+                            // 其他字段作为标签字段
+                            else {
+                                tag_fields.push(field_name.to_string());
+                            }
+
+                            fields.push((field_name, data_type_str));
+                        }
+                    }
+                    field_start = i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 处理最后一个字段
+    let last_field = &fields_part[field_start..].trim();
+    if !last_field.is_empty() {
+        let field_parts: Vec<&str> = last_field.split_whitespace().collect();
+        if field_parts.len() >= 2 {
+            let field_name = field_parts[0];
+            let data_type_str = field_parts[1].to_uppercase();
+
+            // 检查是否为时间字段
+            if data_type_str == "TIMESTAMP" {
+                time_field = Some(field_name.to_string());
+            }
+            // 检查是否为值字段
+            else if data_type_str == "FLOAT64" || data_type_str == "FLOAT" || data_type_str == "DOUBLE" {
+                value_field = Some(field_name.to_string());
+            }
+            // 其他字段作为标签字段
+            else {
+                tag_fields.push(field_name.to_string());
+            }
+
+            fields.push((field_name, data_type_str));
+        }
+    }
+
+    // 验证必要字段
+    let time_field = time_field.ok_or(SqlError::Parsing(
+        "Missing TIMESTAMP field for timeseries table".to_string(),
+    ))?;
+    let value_field = value_field.ok_or(SqlError::Parsing(
+        "Missing FLOAT/DOUBLE/FLOAT64 value field for timeseries table".to_string(),
+    ))?;
+
+    // 转换标签字段为&str数组
+    let tag_field_refs: Vec<&str> = tag_fields.iter().map(|f| f.as_str()).collect();
+
+    // 调用RemDb的create_time_series_table方法创建时序表
+    db.create_time_series_table(
+        &table_name,
+        &time_field,
+        &value_field,
+        &tag_field_refs,
+        None
+    )?;
 
     // 构造结果集
     Ok(ResultSet {
