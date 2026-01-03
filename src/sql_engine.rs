@@ -75,6 +75,11 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
         return execute_delete(db, sql);
     }
 
+    // 处理UPDATE命令
+    if sql_lower.starts_with("update ") {
+        return execute_update(db, sql);
+    }
+
     // 处理CREATE TABLE命令
     if sql_lower.starts_with("create table ") {
         return execute_create_table(db, sql);
@@ -139,106 +144,71 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
 
 /// 执行TABLES命令
 fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
+    // 直接查询所有表的名称
+    // 我们需要遍历所有可能的表ID，直到获取失败为止
     let columns = vec!["Tables".to_string()];
     let mut rows = Vec::new();
-
-    // 获取所有表，包括初始配置的表和动态创建的表
-    for table in db.config.tables {
-        rows.push(vec![table.name.to_string()]);
+    let mut affected_rows = 0;
+    
+    // 遍历所有可能的表ID
+    let mut table_id = 0;
+    loop {
+        match db.get_table(table_id) {
+            Ok(table) => {
+                // 添加表名到结果集
+                rows.push(vec![table.def.name.to_string()]);
+                affected_rows += 1;
+                table_id += 1;
+            },
+            Err(_) => {
+                // 没有更多的表了，退出循环
+                break;
+            }
+        }
     }
 
-    // 添加调试信息：打印实际表数量和表定义数量
-    debug_println!("Debug: db.config.tables.len() = {}", db.config.tables.len());
-
+    // 构造结果集
     Ok(ResultSet {
         columns,
-        rows: rows.clone(),
-        affected_rows: rows.len(),
+        rows,
+        affected_rows,
     })
 }
 
 /// 执行DESCRIBE命令
-fn execute_describe(db: &RemDb, table_name: &str) -> std::result::Result<ResultSet, SqlError> {
-    let table = db
-        .config
-        .tables
-        .iter()
-        .find(|t| *t.name == *table_name)
-        .ok_or(SqlError::Parsing(format!(
-            "Table not found: {}",
-            table_name
-        )))?;
+fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 直接使用sql_query方法执行DESCRIBE查询
+    let result = db.sql_query(&format!("DESCRIBE {}", table_name))?;
 
-    let columns = vec![
-        "Type".to_string(),
-        "Name".to_string(),
-        "Details".to_string(),
-    ];
-    let mut rows = Vec::new();
-
-    // 添加表名信息
-    rows.push(vec![
-        "TABLE".to_string(),
-        table.name.to_string(),
-        "".to_string(),
-    ]);
-
-    // 添加列信息
-    for field in table.fields {
-        let data_type = match field.data_type {
-            remdb::types::DataType::UInt8 => "UInt8",
-            remdb::types::DataType::UInt16 => "UInt16",
-            remdb::types::DataType::UInt32 => "UInt32",
-            remdb::types::DataType::UInt64 => "UInt64",
-            remdb::types::DataType::Int8 => "Int8",
-            remdb::types::DataType::Int16 => "Int16",
-            remdb::types::DataType::Int32 => "Int32",
-            remdb::types::DataType::Int64 => "Int64",
-            remdb::types::DataType::Float32 => "Float32",
-            remdb::types::DataType::Float64 => "Float64",
-            remdb::types::DataType::Bool => "Bool",
-            remdb::types::DataType::Timestamp => "Timestamp",
-            remdb::types::DataType::String => "String",
-        };
-
-        let mut details = format!("Size: {}", field.size);
-
-        // 标记主键
-        if field.offset == table.fields[table.primary_key].offset {
-            details.push_str(", PRIMARY KEY");
-        }
-
-        rows.push(vec!["COLUMN".to_string(), field.name.to_string(), details]);
-    }
-
-    // 添加索引信息（示例）
-    // 注意：由于当前remdb库不支持在TableDef中存储辅助索引信息，
-    // 这里我们使用示例数据来演示索引显示功能
-    let sample_indices = match table_name {
-        "user" => &[
-            ("PRIMARY", "id", "BTREE"),
-            ("idx_user_name", "name", "BTREE"),
-        ] as &[(&str, &str, &str)],
-        "product" => &[
-            ("PRIMARY", "id", "BTREE"),
-            ("idx_product_category", "category", "BTREE"),
-            ("idx_product_price", "price", "BTREE"),
-        ] as &[(&str, &str, &str)],
-        _ => &[("PRIMARY", "id", "BTREE")] as &[(&str, &str, &str)],
-    };
-
-    for &(index_name, column_name, index_type) in sample_indices {
-        rows.push(vec![
-            "INDEX".to_string(),
-            index_name.to_string(),
-            format!("{} ({})", index_type, column_name),
-        ]);
-    }
-
+    // 构造结果集
     Ok(ResultSet {
-        columns,
-        rows: rows.clone(),
-        affected_rows: rows.len(),
+        columns: result.columns.clone(),
+        rows: result.rows.iter().map(|row| {
+            row.values.iter().map(|value| {
+                unsafe {
+                    // 将TypedValue转换为字符串
+                    match value.value_type {
+                        remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
+                        remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
+                        remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
+                        remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
+                        remdb::types::DataType::Int8 => format!("{}", value.value.i8),
+                        remdb::types::DataType::Int16 => format!("{}", value.value.i16),
+                        remdb::types::DataType::Int32 => format!("{}", value.value.i32),
+                        remdb::types::DataType::Int64 => format!("{}", value.value.i64),
+                        remdb::types::DataType::Float32 => format!("{}", value.value.float32),
+                        remdb::types::DataType::Float64 => format!("{}", value.value.float64),
+                        remdb::types::DataType::Bool => format!("{}", value.value.bool),
+                        remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                        remdb::types::DataType::String => {
+                            let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                            string_slice.trim_end_matches(char::from(0)).to_string()
+                        },
+                    }
+                }
+            }).collect()
+        }).collect(),
+        affected_rows: result.rows.len(),
     })
 }
 
@@ -283,38 +253,27 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     for row in &result.rows {
         let mut row_data = Vec::new();
 
-        // 遍历行中的所有值，将remdb::Value转换为字符串
-        for (i, value) in row.values.iter().enumerate() {
+        // 遍历行中的所有值，将remdb::TypedValue转换为字符串
+        for value in &row.values {
             let value_str = unsafe {
-                // 1. 首先尝试字符串类型
-                let mut str_value = String::new();
-                let mut has_valid_chars = false;
-
-                for &c in value.value.string.iter() {
-                    if c == 0 {
-                        break; // 遇到null终止符，结束字符串
-                    }
-                    if c.is_ascii_graphic() || c.is_ascii_whitespace() {
-                        // 只有当字符是可打印的ASCII字符或空格时，才认为是有效字符
-                        str_value.push(c as char);
-                        has_valid_chars = true;
-                    }
-                }
-
-                if has_valid_chars {
-                    // 去除可能的引号
-                    str_value.trim_matches('"').to_string()
-                } else {
-                    // 对于非字符串值，尝试多种类型解析
-                    // 直接使用i64字段获取整数值
-                    let int64_val = value.value.i64;
-                    let i32_val = value.value.i32;
-                    let float32_val = value.value.float32;
-                    let float64_val = value.value.float64;
-
-                    // 优先检查i64和i32字段，因为id通常是整数
-                    // 使用i64字段直接获取整数值，避免浮点转换误差
-                    format!("{}", int64_val)
+                // 根据TypedValue的value_type确定如何转换为字符串
+                match value.value_type {
+                    remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
+                    remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
+                    remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
+                    remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
+                    remdb::types::DataType::Int8 => format!("{}", value.value.i8),
+                    remdb::types::DataType::Int16 => format!("{}", value.value.i16),
+                    remdb::types::DataType::Int32 => format!("{}", value.value.i32),
+                    remdb::types::DataType::Int64 => format!("{}", value.value.i64),
+                    remdb::types::DataType::Float32 => format!("{}", value.value.float32),
+                    remdb::types::DataType::Float64 => format!("{}", value.value.float64),
+                    remdb::types::DataType::Bool => format!("{}", value.value.bool),
+                    remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                    remdb::types::DataType::String => {
+                        let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                        string_slice.trim_end_matches(char::from(0)).to_string()
+                    },
                 }
             };
 
@@ -343,6 +302,17 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     debug_println!("Debug: Executing INSERT SQL: {}", sql);
 
     let sql_lower = sql.trim().to_lowercase();
+
+    // 提取表名
+    let table_name = extract_table_name(&sql_lower)?;
+
+    // 获取表定义 - 注意：动态创建的表不会出现在db.config.tables中，所以我们跳过这个检查
+    // 直接让db.sql_query处理表不存在的情况
+
+    // 提取指定的列名
+    let specified_columns = extract_columns(&sql_lower)?;
+
+    // 跳过NOT NULL列检查，因为动态创建的表不在db.config.tables中
 
     // 检查INSERT语句是否包含id列
     if !sql_lower.contains("(id") && !sql_lower.contains("id,") {
@@ -689,7 +659,33 @@ fn execute_delete(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 调试：打印要执行的SQL语句
     debug_println!("Debug: Executing DELETE SQL: {}", sql);
 
-    // 直接使用RemDb的sql_query方法执行DELETE语句，避免手动解析和调用可能有问题的delete_record方法
+    // 处理常见用户错误：DELETE * FROM table（应该是DELETE FROM table）
+    let processed_sql = if sql.to_lowercase().contains("delete * from") {
+        sql.replace("*", "")
+    } else {
+        sql.to_string()
+    };
+
+    // 直接使用RemDb的sql_query方法执行DELETE语句
+    let result = db.sql_query(&processed_sql)?;
+
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: result.rows.len(), // 返回受影响的行数
+    })
+}
+
+/// 执行UPDATE命令
+fn execute_update(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 增加更新操作计数
+    db.metrics.inc_update_ops();
+
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing UPDATE SQL: {}", sql);
+
+    // 直接使用RemDb的sql_query方法执行UPDATE语句
     let result = db.sql_query(sql)?;
 
     // 构造结果集

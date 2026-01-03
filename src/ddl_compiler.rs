@@ -217,6 +217,8 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     // 检查PRIMARY KEY约束
     if constraints_lower.contains("primary key") {
         primary_key = true;
+        // PRIMARY KEY columns are implicitly NOT NULL
+        nullable = false;
     }
 
     // 检查AUTO_INCREMENT约束（支持多种写法）
