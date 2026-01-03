@@ -1,8 +1,8 @@
+mod cli;
 mod ddl_compiler;
+pub mod jdbc_server;
 mod snapshot_loader;
 mod sql_engine;
-mod cli;
-pub mod jdbc_server;
 
 // 全局debug模式开关
 static DEBUG_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

@@ -81,7 +81,12 @@ cargo build --release
 |      | `--non_interactive` | 非交互式模式（初始化后退出） |
 |      | `--test_export` | 测试导出功能 |
 |      | `--jdbc_port` | JDBC 监听端口 |
+|      | `--jdbc_enabled` | 是否启用 JDBC 服务 |
 |      | `--max_connections` | 最大允许的并发 JDBC 客户端连接数 |
+|      | `--jdbc_timeout` | JDBC 执行超时时间（秒） |
+|      | `--jdbc_auth_enabled` | 是否启用 JDBC 认证 |
+|      | `--jdbc_username` | JDBC 认证用户名 |
+|      | `--jdbc_password_hash` | JDBC 认证密码哈希值 |
 |      | `--pubsub_enabled` | 是否启用 PubSub 功能 |
 |      | `--pubsub_udp_bind` | UDP 绑定地址 |
 |      | `--pubsub_heartbeat` | 心跳间隔（毫秒） |
@@ -128,11 +133,25 @@ max_incremental_snapshots = 5
 # 是否开启debug模式
 debug = false
 
+# 是否启用JDBC服务
+jdbc_enabled = true
+
 # JDBC监听端口
 jdbc_port = 5432
 
 # 最大允许的并发jdbc客户端连接数
 max_connections = 100
+
+# JDBC执行超时时间（秒）
+jdbc_timeout = 5
+
+# JDBC认证配置
+# 是否启用JDBC认证
+jdbc_auth_enabled = false
+# JDBC认证用户名
+jdbc_username = "admin"
+# JDBC认证密码哈希值
+jdbc_password_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
 # pubsub配置
 [pubsub]
@@ -173,6 +192,9 @@ sync_timeout_ms = 2000
 
 # 启动服务器，指定JDBC端口
 ./remdb-server --jdbc_port 5432
+
+# 启用调试模式
+./remdb-server --debug
 ```
 
 ### 2. 使用DDL文件
@@ -182,11 +204,14 @@ sync_timeout_ms = 2000
 ./remdb-server --ddl schema.ddl
 ```
 
-### 3. 加载快照
+### 3. 加载快照和全量镜像
 
 ```bash
 # 从快照目录加载数据
 ./remdb-server --snapshot_dir ./snapshots
+
+# 从全量镜像文件加载数据
+./remdb-server --full_image ./full_image.remdb
 ```
 
 ### 4. 非交互式模式
@@ -201,6 +226,19 @@ sync_timeout_ms = 2000
 ```bash
 # 测试数据导出功能
 ./remdb-server --ddl schema.ddl --test_export
+```
+
+### 6. JDBC服务配置
+
+```bash
+# 启用JDBC服务
+./remdb-server --jdbc_enabled true --jdbc_port 6666
+
+# 配置JDBC超时时间和最大连接数
+./remdb-server --jdbc_port 6666 --jdbc_timeout 10 --max_connections 200
+
+# 启用JDBC认证
+./remdb-server --jdbc_port 6666 --jdbc_auth_enabled true --jdbc_username admin --jdbc_password_hash "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 ```
 
 ## 高可用配置
@@ -430,6 +468,39 @@ public class RemDbExample {
 }
 ```
 
+### 使用JDBC认证的示例
+
+```java
+import java.sql.*;
+
+public class RemDbAuthExample {
+    public static void main(String[] args) {
+        String url = "jdbc:remdb://localhost:6666";
+        String user = "admin";
+        String password = "password";
+
+        try (Connection conn = DriverManager.getConnection(url, user, password);
+             Statement stmt = conn.createStatement()) {
+
+            // 执行查询
+            String selectSQL = "SELECT id, name, age FROM users";
+            try (ResultSet rs = stmt.executeQuery(selectSQL)) {
+                while (rs.next()) {
+                    int id = rs.getInt("id");
+                    String name = rs.getString("name");
+                    int age = rs.getInt("age");
+                    System.out.printf("ID: %d, Name: %s, Age: %d%n", id, name, age);
+                }
+            }
+
+        } catch (SQLException e) {
+            System.err.println("Authentication failed or connection error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+```
+
 ### JDBC URL 格式
 
 ```
@@ -447,6 +518,16 @@ jdbc:remdb://host:port
 - `UPDATE` - 更新数据
 - `DELETE` - 删除数据
 - `DROP TABLE` - 删除表
+
+### JDBC认证
+
+当JDBC认证启用时，客户端必须提供有效的用户名和密码才能连接到服务器。认证流程如下：
+1. 服务器配置了用户名和密码哈希值
+2. 客户端连接时提供用户名和明文密码
+3. 服务器将客户端提供的密码进行哈希计算
+4. 比较计算结果与配置的哈希值，匹配则认证成功
+
+**注意**：密码哈希使用SHA-256算法生成，示例中的默认密码为"password"，其SHA-256哈希值为"8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
 ## 致谢
 

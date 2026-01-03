@@ -1,11 +1,13 @@
-use rustyline::{Config, Editor};
-use rustyline::history::FileHistory;
-use rustyline::error::ReadlineError;
-use remdb::RemDb;
+use crate::snapshot_loader::{
+    cleanup_old_snapshots, save_full_snapshot_to_dir, save_incremental_snapshot_to_dir,
+};
 use crate::sql_engine::{execute_extended_sql, format_result_set};
-use crate::snapshot_loader::{save_full_snapshot_to_dir, save_incremental_snapshot_to_dir, cleanup_old_snapshots};
-use std::time::SystemTime;
+use remdb::RemDb;
+use rustyline::error::ReadlineError;
+use rustyline::history::FileHistory;
+use rustyline::{Config, Editor};
 use std::env;
+use std::time::SystemTime;
 
 /// 运行交互式命令行界面
 pub fn run_cli(db: &mut RemDb) {
@@ -13,16 +15,16 @@ pub fn run_cli(db: &mut RemDb) {
     println!("Type 'help' for available commands");
     println!("Type 'exit' to quit");
     println!("{}", "=".repeat(60));
-    
+
     // 初始化快照目录（默认使用当前目录下的snapshots文件夹）
     let snapshot_dir = env::var("REMDB_SNAPSHOT_DIR").unwrap_or_else(|_| "snapshots".to_string());
     println!("Snapshot directory: {}", snapshot_dir);
-    
+
     let config = Config::builder()
         .history_ignore_space(true)
         .auto_add_history(true)
         .build();
-    
+
     let mut editor: Editor<(), FileHistory> = match Editor::with_config(config) {
         Ok(editor) => editor,
         Err(err) => {
@@ -30,10 +32,10 @@ pub fn run_cli(db: &mut RemDb) {
             return;
         }
     };
-    
+
     // 尝试加载历史记录
     let _ = editor.load_history("remdb_history.txt");
-    
+
     loop {
         let prompt = "remdb> ";
         match editor.readline(prompt) {
@@ -42,26 +44,28 @@ pub fn run_cli(db: &mut RemDb) {
                 if line.is_empty() {
                     continue;
                 }
-                
+
                 if line.eq_ignore_ascii_case("exit") || line.eq_ignore_ascii_case(":q") {
                     // 保存历史记录
                     let _ = editor.save_history("remdb_history.txt");
                     break;
                 }
-                
+
                 if line.eq_ignore_ascii_case("help") {
                     print_help();
                     continue;
                 }
-                
+
                 // 处理snapshot命令
                 if line.starts_with("snapshot ") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() < 2 {
-                        eprintln!("Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'.");
+                        eprintln!(
+                            "Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'."
+                        );
                         continue;
                     }
-                    
+
                     match parts[1] {
                         "full" => {
                             // 保存完整快照
@@ -82,12 +86,14 @@ pub fn run_cli(db: &mut RemDb) {
                             }
                         }
                         _ => {
-                            eprintln!("Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'.");
+                            eprintln!(
+                                "Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'."
+                            );
                         }
                     }
                     continue;
                 }
-                
+
                 // 执行SQL命令
                 match execute_extended_sql(db, line) {
                     Ok(result_set) => {

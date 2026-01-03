@@ -50,7 +50,10 @@ pub fn load_snapshot_from_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
 /// 保存完整快照到目录
 pub fn save_full_snapshot_to_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
     fs::create_dir_all(dir_path).map_err(|_| RemDbError::FileIoError)?;
-    let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|_| RemDbError::InternalError)?.as_secs();
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| RemDbError::InternalError)?
+        .as_secs();
     let file_path = format!("{}/full_{}.remd", dir_path, timestamp);
     println!("Saving full snapshot to: {}", file_path);
     db.save_snapshot(&file_path)
@@ -59,7 +62,10 @@ pub fn save_full_snapshot_to_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()
 /// 保存增量快照到目录
 pub fn save_incremental_snapshot_to_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
     fs::create_dir_all(dir_path).map_err(|_| RemDbError::FileIoError)?;
-    let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|_| RemDbError::InternalError)?.as_secs();
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| RemDbError::InternalError)?
+        .as_secs();
     let file_path = format!("{}/incremental_{}.remd", dir_path, timestamp);
     println!("Saving incremental snapshot to: {}", file_path);
     db.save_incremental_snapshot(&file_path)
