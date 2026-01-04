@@ -235,7 +235,7 @@ public class RemDbStatement implements Statement {
         }
         
         if (allInserts && !batchSqls.isEmpty()) {
-            // 合并为批量INSERT语句
+            // 构建批量INSERT语句
             String batchInsertSql = buildBatchInsertSql(firstSql, columns, allValues);
             String response = connection.executeCommand("EXECUTE|" + batchInsertSql);
             int affectedRows = parseUpdateCount(response);

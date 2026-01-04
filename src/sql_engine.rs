@@ -920,11 +920,15 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     let sql_lower = sql.trim().to_lowercase();
 
     // 查找表名和字段定义开始位置
-    let after_create = sql_lower
-        .strip_prefix("create table ")
-        .ok_or(SqlError::Parsing(
-            "Not a CREATE TABLE statement".to_string(),
-        ))?;
+    let after_create = if let Some(rest) = sql_lower.strip_prefix("create table if not exists ") {
+        rest
+    } else {
+        sql_lower
+            .strip_prefix("create table ")
+            .ok_or(SqlError::Parsing(
+                "Not a CREATE TABLE statement".to_string(),
+            ))?
+    };
     let table_name_end = after_create
         .find(|c: char| c.is_whitespace() || c == '(')
         .unwrap_or(after_create.len());
@@ -1049,11 +1053,15 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
     let sql_lower = sql.trim().to_lowercase();
 
     // 查找表名和字段定义开始位置
-    let after_create = sql_lower
-        .strip_prefix("create timeseries table ")
-        .ok_or(SqlError::Parsing(
-            "Not a CREATE TIMESERIES TABLE statement".to_string(),
-        ))?;
+    let after_create = if let Some(rest) = sql_lower.strip_prefix("create timeseries table if not exists ") {
+        rest
+    } else {
+        sql_lower
+            .strip_prefix("create timeseries table ")
+            .ok_or(SqlError::Parsing(
+                "Not a CREATE TIMESERIES TABLE statement".to_string(),
+            ))?
+    };
     let table_name_end = after_create
         .find(|c: char| c.is_whitespace() || c == '(')
         .unwrap_or(after_create.len());

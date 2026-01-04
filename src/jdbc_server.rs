@@ -175,7 +175,7 @@ impl JdbcServer {
                     "ERROR|Authentication failed: Invalid username or password".to_string()
                 }
             }
-            "EXECUTE" => {
+            "EXECUTE" | "TIMESERIES_EXECUTE" | "TIMESERIES_QUERY" | "TIMESERIES_BATCH" => {
                 // 检查是否需要认证且已认证
                 if auth_enabled && !*is_authenticated {
                     return "ERROR|Authentication required. Please send AUTH command first"

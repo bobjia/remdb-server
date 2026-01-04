@@ -390,4 +390,118 @@ public class RemDbConnection implements Connection {
             throw new SQLException("Failed to execute command: " + e.getMessage(), e);
         }
     }
+    
+    // 时序数据库特定方法
+    
+    /**
+     * 创建时序表
+     * @param tableName 表名
+     * @param timeField 时间字段名
+     * @param valueField 值字段名
+     * @param tagFields 标签字段名列表
+     * @throws SQLException 如果创建失败
+     */
+    public void createTimeSeriesTable(String tableName, String timeField, String valueField, String... tagFields) throws SQLException {
+        checkClosed();
+        
+        StringBuilder sql = new StringBuilder();
+        sql.append("CREATE TIMESERIES TABLE ").append(tableName).append(" (");
+        sql.append(timeField).append(" TIMESTAMP, ");
+        sql.append(valueField).append(" FLOAT64");
+        
+        for (String tagField : tagFields) {
+            sql.append(", ").append(tagField).append(" TEXT");
+        }
+        
+        sql.append(")");
+        
+        Statement stmt = createStatement();
+        stmt.executeUpdate(sql.toString());
+        stmt.close();
+    }
+    
+    /**
+     * 批量写入时序数据
+     * @param tableName 表名
+     * @param records 时序数据记录列表，格式为：时间戳,值,标签1,标签2,...
+     * @throws SQLException 如果写入失败
+     */
+    public void writeTimeSeriesBatch(String tableName, List<Object[]> records) throws SQLException {
+        checkClosed();
+        
+        if (records.isEmpty()) {
+            return;
+        }
+        
+        // 构建批量INSERT语句
+        StringBuilder sql = new StringBuilder();
+        sql.append("INSERT INTO ").append(tableName).append(" VALUES ");
+        
+        for (int i = 0; i < records.size(); i++) {
+            Object[] record = records.get(i);
+            if (i > 0) {
+                sql.append(",");
+            }
+            sql.append("(");
+            
+            for (int j = 0; j < record.length; j++) {
+                if (j > 0) {
+                    sql.append(",");
+                }
+                
+                Object value = record[j];
+                if (value == null) {
+                    sql.append("NULL");
+                } else if (value instanceof String) {
+                    sql.append("'").append(((String) value).replace("'", "''")).append("'");
+                } else if (value instanceof Timestamp) {
+                    sql.append(((Timestamp) value).getTime());
+                } else {
+                    sql.append(value.toString());
+                }
+            }
+            sql.append(")");
+        }
+        
+        Statement stmt = createStatement();
+        stmt.executeUpdate(sql.toString());
+        stmt.close();
+    }
+    
+    /**
+     * 查询指定时间范围内的时序数据
+     * @param tableName 表名
+     * @param startTime 开始时间戳（毫秒）
+     * @param endTime 结束时间戳（毫秒）
+     * @return 结果集
+     * @throws SQLException 如果查询失败
+     */
+    public ResultSet queryTimeSeries(String tableName, long startTime, long endTime) throws SQLException {
+        checkClosed();
+        
+        String sql = String.format("SELECT * FROM %s WHERE timestamp BETWEEN %d AND %d ORDER BY timestamp", 
+                                  tableName, startTime, endTime);
+        
+        Statement stmt = createStatement();
+        return stmt.executeQuery(sql);
+    }
+    
+    /**
+     * 查询指定标签的时序数据
+     * @param tableName 表名
+     * @param tagName 标签名
+     * @param tagValue 标签值
+     * @param limit 返回记录数限制
+     * @return 结果集
+     * @throws SQLException 如果查询失败
+     */
+    public ResultSet queryTimeSeriesByTag(String tableName, String tagName, String tagValue, int limit) throws SQLException {
+        checkClosed();
+        
+        String sql = String.format("SELECT * FROM %s WHERE %s = '%s' ORDER BY timestamp DESC LIMIT %d", 
+                                  tableName, tagName, tagValue.replace("'", "''"), limit);
+        
+        Statement stmt = createStatement();
+        return stmt.executeQuery(sql);
+    }
 }

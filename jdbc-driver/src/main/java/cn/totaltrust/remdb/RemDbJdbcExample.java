@@ -5,7 +5,7 @@ import java.sql.*;
 public class RemDbJdbcExample {
     public static void main(String[] args) {
         String url = "jdbc:remdb://localhost:6666";
-        String user = "admin";
+        String user = "root";
         String password = "admin";
 
         Connection conn = null;

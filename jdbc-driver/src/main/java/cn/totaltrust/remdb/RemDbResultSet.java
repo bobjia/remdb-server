@@ -167,7 +167,14 @@ public class RemDbResultSet implements ResultSet {
         checkRowIndex();
         checkColumnIndex(columnIndex);
         String value = rows.get(currentRowIndex).get(columnIndex - 1);
-        return Timestamp.valueOf(value);
+        try {
+            // 尝试从毫秒时间戳解析
+            long timestamp = Long.parseLong(value);
+            return new Timestamp(timestamp);
+        } catch (NumberFormatException e) {
+            // 如果不是数字，尝试从字符串格式解析
+            return Timestamp.valueOf(value);
+        }
     }
 
     @Override
@@ -1008,7 +1015,14 @@ public class RemDbResultSet implements ResultSet {
         } else if (type == Time.class) {
             return type.cast(Time.valueOf(value));
         } else if (type == Timestamp.class) {
-            return type.cast(Timestamp.valueOf(value));
+            try {
+                // 尝试从毫秒时间戳解析
+                long timestamp = Long.parseLong(value);
+                return type.cast(new Timestamp(timestamp));
+            } catch (NumberFormatException e) {
+                // 如果不是数字，尝试从字符串格式解析
+                return type.cast(Timestamp.valueOf(value));
+            }
         } else {
             throw new SQLException("Unsupported type: " + type.getName());
         }

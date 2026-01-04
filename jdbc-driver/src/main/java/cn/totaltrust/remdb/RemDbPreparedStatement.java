@@ -212,6 +212,7 @@ public class RemDbPreparedStatement implements PreparedStatement {
         if (isInsert) {
             // 构建批量INSERT语句
             String batchInsertSql = buildBatchInsertSql();
+            // 执行批量INSERT
             String response = connection.executeCommand("EXECUTE|" + batchInsertSql);
             int affectedRows = parseUpdateCount(response);
             
@@ -286,6 +287,10 @@ public class RemDbPreparedStatement implements PreparedStatement {
                     valuePart.append("'").append(strVal).append("'");
                 } else if (param instanceof Boolean) {
                     valuePart.append(((Boolean) param) ? 1 : 0);
+                } else if (param instanceof Timestamp) {
+                    // 时序数据优化：将Timestamp转换为毫秒时间戳
+                    long timestamp = ((Timestamp) param).getTime();
+                    valuePart.append(timestamp);
                 } else {
                     valuePart.append(param.toString());
                 }
@@ -791,6 +796,10 @@ public class RemDbPreparedStatement implements PreparedStatement {
                     sb.append("'").append(strVal).append("'");
                 } else if (param instanceof Boolean) {
                     sb.append(((Boolean) param) ? 1 : 0);
+                } else if (param instanceof Timestamp) {
+                    // 时序数据优化：将Timestamp转换为毫秒时间戳
+                    long timestamp = ((Timestamp) param).getTime();
+                    sb.append(timestamp);
                 } else {
                     sb.append(param.toString());
                 }
