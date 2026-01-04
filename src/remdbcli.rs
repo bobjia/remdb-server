@@ -260,4 +260,6 @@ fn print_help() {
     println!("  delete ...                     - Execute DELETE statement");
     println!("  create table ...               - Create a new table");
     println!("  create index ...               - Create a new index");
+    println!("  stat                           - Show database monitoring statistics");
+    println!("  healthcheck                    - Check database health status");
 }
