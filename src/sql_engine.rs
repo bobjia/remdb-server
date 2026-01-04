@@ -1154,13 +1154,57 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
     // 转换标签字段为&str数组
     let tag_field_refs: Vec<&str> = tag_fields.iter().map(|f| f.as_str()).collect();
 
+    // 解析WITH子句
+    let mut config = None;
+    let mut compression_type = remdb::time_series::CompressionType::DeltaRunLength;
+    let mut retention_period_secs = 7 * 24 * 3600; // 默认7天
+    
+    // 查找WITH子句的位置
+    if let Some(with_pos) = sql_lower.find(" with ") {
+        let with_clause = &sql[with_pos + 6..].trim();
+        
+        // 解析WITH子句中的属性
+        let mut attr_start = 0;
+        let mut bracket_count = 0;
+        
+        for (i, c) in with_clause.char_indices() {
+            match c {
+                '(' => bracket_count += 1,
+                ')' => bracket_count -= 1,
+                ',' => {
+                    if bracket_count == 0 {
+                        // 提取属性
+                        let attr = &with_clause[attr_start..i].trim();
+                        parse_with_attr(attr, &mut compression_type, &mut retention_period_secs)?;
+                        attr_start = i + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // 处理最后一个属性
+        let last_attr = &with_clause[attr_start..].trim();
+        if !last_attr.is_empty() {
+            parse_with_attr(last_attr, &mut compression_type, &mut retention_period_secs)?;
+        }
+        
+        // 创建配置
+        config = Some(remdb::time_series::TimeSeriesConfig {
+            partition_duration_secs: 3600, // 默认1小时
+            retention_period_secs,
+            compression: compression_type,
+            max_partitions: 1000,
+        });
+    }
+
     // 调用RemDb的create_time_series_table方法创建时序表
     db.create_time_series_table(
         &table_name,
         &time_field,
         &value_field,
         &tag_field_refs,
-        None
+        config
     )?;
 
     // 构造结果集
@@ -1169,6 +1213,101 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
         rows: Vec::new(),
         affected_rows: 0,
     })
+}
+
+/// 解析WITH子句中的属性
+fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::CompressionType, retention_period_secs: &mut u64) -> std::result::Result<(), SqlError> {
+    let attr_lower = attr.trim().to_lowercase();
+    
+    // 解析COMPRESSION属性
+    if attr_lower.starts_with("compression = ") {
+        let comp_part = attr_lower.strip_prefix("compression = ").unwrap();
+        
+        // 提取括号内的内容
+        let comp_content = comp_part.strip_prefix("(").and_then(|s| s.strip_suffix(")")).ok_or(SqlError::Parsing(
+            "Invalid COMPRESSION syntax, expected WITH COMPRESSION = (algorithm='delta-delta', enabled=true)".to_string(),
+        ))?;
+        
+        // 解析algorithm属性
+        let mut algorithm = "delta-runlength";
+        
+        let mut prop_start = 0;
+        let mut bracket_count = 0;
+        
+        for (i, c) in comp_content.char_indices() {
+            match c {
+                '(' => bracket_count += 1,
+                ')' => bracket_count -= 1,
+                ',' => {
+                    if bracket_count == 0 {
+                        let prop = &comp_content[prop_start..i].trim();
+                        if let Some(alg_pos) = prop.find("algorithm='") {
+                            let alg_end = prop[alg_pos + 11..].find("'").ok_or(SqlError::Parsing(
+                                "Invalid algorithm syntax, expected algorithm='<algorithm>'".to_string(),
+                            ))?;
+                            algorithm = &prop[alg_pos + 11..alg_pos + 11 + alg_end];
+                        }
+                        prop_start = i + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // 处理最后一个属性
+        let last_prop = &comp_content[prop_start..].trim();
+        if let Some(alg_pos) = last_prop.find("algorithm='") {
+            let alg_end = last_prop[alg_pos + 11..].find("'").ok_or(SqlError::Parsing(
+                "Invalid algorithm syntax, expected algorithm='<algorithm>'".to_string(),
+            ))?;
+            algorithm = &last_prop[alg_pos + 11..alg_pos + 11 + alg_end];
+        }
+        
+        // 设置压缩类型
+        *compression_type = match algorithm {
+            "delta-delta" => remdb::time_series::CompressionType::DeltaDelta,
+            "delta" => remdb::time_series::CompressionType::Delta,
+            "runlength" => remdb::time_series::CompressionType::RunLength,
+            "delta-runlength" => remdb::time_series::CompressionType::DeltaRunLength,
+            _ => return Err(SqlError::Parsing(format!("Unsupported compression algorithm: {}", algorithm))),
+        };
+    }
+    // 解析TTL属性
+    else if attr_lower.starts_with("ttl = ") {
+        let ttl_part = attr_lower.strip_prefix("ttl = ").unwrap();
+        let ttl_value = ttl_part.trim_matches(|c| c == '\'' || c == '"');
+        
+        // 解析TTL值，支持天、小时、分钟、秒
+        let mut seconds = 0;
+        let mut num_str = String::new();
+        let mut unit = String::new();
+        
+        for c in ttl_value.chars() {
+            if c.is_digit(10) || c == '.' {
+                num_str.push(c);
+            } else if c.is_whitespace() {
+                continue;
+            } else {
+                unit.push(c);
+            }
+        }
+        
+        let num = num_str.parse::<f64>().map_err(|_| SqlError::Parsing(
+            format!("Invalid TTL value: {}", ttl_value).to_string(),
+        ))?;
+        
+        match unit.as_str() {
+            "days" | "day" => seconds = (num * 24.0 * 3600.0) as u64,
+            "hours" | "hour" => seconds = (num * 3600.0) as u64,
+            "minutes" | "minute" => seconds = (num * 60.0) as u64,
+            "seconds" | "second" => seconds = num as u64,
+            _ => return Err(SqlError::Parsing(format!("Unsupported TTL unit: {}", unit))),
+        }
+        
+        *retention_period_secs = seconds;
+    }
+    
+    Ok(())
 }
 
 /// 执行CREATE INDEX命令
