@@ -6,7 +6,7 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 
 - 支持基本的 JDBC 连接管理
 - 支持 SQL 查询、插入、更新和删除操作
-- 支持事务处理（自动提交模式）
+- 支持完整的事务处理（包括手动提交/回滚）
 - 支持结果集处理
 - 支持预编译语句（PreparedStatement）
 - 支持内嵌函数调用
@@ -77,6 +77,8 @@ remdb-server --config remdb.toml
 
 ### 2. 在 Java 代码中使用 JDBC 驱动
 
+#### 基本操作示例
+
 以下是一个简单的示例，展示如何使用 RemDb JDBC 驱动连接数据库、执行查询和更新操作：
 
 ```java
@@ -117,27 +119,104 @@ public class RemDbExample {
 }
 ```
 
+#### 事务处理示例
+
+以下示例展示了如何使用事务处理功能：
+
+```java
+import java.sql.*;
+
+public class RemDbTransactionExample {
+    public static void main(String[] args) {
+        String url = "jdbc:remdb://localhost:5432";
+        String user = "";
+        String password = "";
+
+        try (Connection conn = DriverManager.getConnection(url, user, password)) {
+            // 关闭自动提交，开始事务
+            conn.setAutoCommit(false);
+            
+            try (Statement stmt = conn.createStatement()) {
+                // 创建表（如果不存在）
+                String createTableSQL = "CREATE TABLE IF NOT EXISTS accounts (id INT PRIMARY KEY, balance DOUBLE)";
+                stmt.executeUpdate(createTableSQL);
+                
+                // 初始化数据
+                stmt.executeUpdate("INSERT INTO accounts VALUES (1, 1000.0) ON DUPLICATE KEY UPDATE balance = 1000.0");
+                stmt.executeUpdate("INSERT INTO accounts VALUES (2, 1000.0) ON DUPLICATE KEY UPDATE balance = 1000.0");
+                
+                // 转账操作：从账户1转500到账户2
+                stmt.executeUpdate("UPDATE accounts SET balance = balance - 500 WHERE id = 1");
+                stmt.executeUpdate("UPDATE accounts SET balance = balance + 500 WHERE id = 2");
+                
+                // 提交事务
+                conn.commit();
+                System.out.println("事务提交成功");
+                
+                // 查询结果
+                try (ResultSet rs = stmt.executeQuery("SELECT id, balance FROM accounts")) {
+                    while (rs.next()) {
+                        int id = rs.getInt("id");
+                        double balance = rs.getDouble("balance");
+                        System.out.printf("账户 %d: 余额 %.2f%n", id, balance);
+                    }
+                }
+                
+            } catch (SQLException e) {
+                // 回滚事务
+                conn.rollback();
+                System.out.println("事务回滚：" + e.getMessage());
+                e.printStackTrace();
+            } finally {
+                // 恢复自动提交模式
+                conn.setAutoCommit(true);
+            }
+            
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
 ### 3. 运行示例代码
 
 #### 方法一：使用 Java 命令运行
 
-1. 编译示例代码：
+1. 编译基本示例代码：
    ```bash
    cd jdbc-driver
    javac -cp target/remdb-jdbc-driver-0.1.0.jar src/main/java/cn/totaltrust/remdb/RemDbJdbcExample.java
    ```
 
-2. 运行示例代码：
+2. 运行基本示例代码：
    ```bash
    java -cp .;target/remdb-jdbc-driver-0.1.0.jar cn.totaltrust.remdb.RemDbJdbcExample
    ```
 
+3. 编译事务示例代码：
+   ```bash
+   cd jdbc-driver
+   javac -cp target/remdb-jdbc-driver-0.1.0.jar src/main/java/cn/totaltrust/remdb/RemDbTransactionExample.java
+   ```
+
+4. 运行事务示例代码：
+   ```bash
+   java -cp .;target/remdb-jdbc-driver-0.1.0.jar cn.totaltrust.remdb.RemDbTransactionExample
+   ```
+
 #### 方法二：使用 Maven 运行
 
-1. 运行示例代码：
+1. 运行基本示例代码：
    ```bash
    cd jdbc-driver
    mvn exec:java -Dexec.mainClass="cn.totaltrust.remdb.RemDbJdbcExample"
+   ```
+
+2. 运行事务示例代码：
+   ```bash
+   cd jdbc-driver
+   mvn exec:java -Dexec.mainClass="cn.totaltrust.remdb.RemDbTransactionExample"
    ```
 
 ## JDBC URL 格式
@@ -221,18 +300,16 @@ RemDb JDBC 驱动支持以下 SQL 语句：
 
 ## 注意事项
 
-1. 目前 RemDb 不支持事务，所有操作都是自动提交的
-2. 不支持存储过程
-3. 支持基本函数调用（聚合函数和窗口函数）
-4. 支持索引（包括主键索引和辅助索引）
-5. 不支持视图
-6. 不支持 BLOB、CLOB 等大对象类型
-7. 不支持批量操作
-8. GROUP BY 支持有限（仅与聚合函数结合使用）
+1. 不支持存储过程
+2. 支持基本函数调用（聚合函数和窗口函数）
+3. 支持索引（包括主键索引和辅助索引）
+4. 不支持视图
+5. 不支持 BLOB、CLOB 等大对象类型
+6. 不支持批量操作
+7. GROUP BY 支持有限（仅与聚合函数结合使用）
 
 ## 开发计划
 
-- 支持事务处理
 - 支持批量操作
 - 支持更复杂的 SQL 语句
 - 支持连接池

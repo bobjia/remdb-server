@@ -188,6 +188,30 @@ impl JdbcServer {
                 let sql = parts[1];
                 Self::execute_sql(sql, db, timeout).await
             }
+            "BEGIN" => {
+                // 检查是否需要认证且已认证
+                if auth_enabled && !*is_authenticated {
+                    return "ERROR|Authentication required. Please send AUTH command first"
+                        .to_string();
+                }
+                Self::begin_transaction(db).await
+            }
+            "COMMIT" => {
+                // 检查是否需要认证且已认证
+                if auth_enabled && !*is_authenticated {
+                    return "ERROR|Authentication required. Please send AUTH command first"
+                        .to_string();
+                }
+                Self::commit_transaction(db).await
+            }
+            "ROLLBACK" => {
+                // 检查是否需要认证且已认证
+                if auth_enabled && !*is_authenticated {
+                    return "ERROR|Authentication required. Please send AUTH command first"
+                        .to_string();
+                }
+                Self::rollback_transaction(db).await
+            }
             "CLOSE" => "OK|Connection closed".to_string(),
             _ => {
                 format!("ERROR|Unknown command: {}", command)
@@ -250,7 +274,7 @@ impl JdbcServer {
             }
         }
     }
-
+    
     /// 验证用户名和密码
     pub fn verify_credentials(
         provided_username: &str,
@@ -286,7 +310,7 @@ impl JdbcServer {
         for row in result_set.rows {
             rows.push(row.join(","));
         }
-        let rows_str = rows.join(";");
+        let rows_str = rows.join("; ");
 
         format!(
             "OK|{}|{}|{}|{}",
@@ -295,5 +319,68 @@ impl JdbcServer {
             columns,
             rows_str
         )
+    }
+    
+    /// 开始事务
+    async fn begin_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
+        let result = tokio::task::spawn_blocking(move || {
+            let mut db_lock = db.blocking_lock();
+            unsafe {
+                db_lock.begin_transaction(
+                    remdb::transaction::TransactionType::ReadWrite,
+                    remdb::transaction::IsolationLevel::ReadCommitted,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0
+                ).map(|_| ())
+            }
+        })
+        .await;
+
+        match result {
+            Ok(join_result) => match join_result {
+                Ok(_) => "OK|Transaction started".to_string(),
+                Err(err) => format!("ERROR|Failed to begin transaction: {:?}", err),
+            },
+            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
+        }
+    }
+    
+    /// 提交事务
+    async fn commit_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
+        let result = tokio::task::spawn_blocking(move || {
+            let mut db_lock = db.blocking_lock();
+            unsafe {
+                db_lock.commit_transaction()
+            }
+        })
+        .await;
+
+        match result {
+            Ok(join_result) => match join_result {
+                Ok(_) => "OK|Transaction committed".to_string(),
+                Err(err) => format!("ERROR|Failed to commit transaction: {:?}", err),
+            },
+            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
+        }
+    }
+    
+    /// 回滚事务
+    async fn rollback_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
+        let result = tokio::task::spawn_blocking(move || {
+            let mut db_lock = db.blocking_lock();
+            unsafe {
+                db_lock.rollback_transaction()
+            }
+        })
+        .await;
+
+        match result {
+            Ok(join_result) => match join_result {
+                Ok(_) => "OK|Transaction rolled back".to_string(),
+                Err(err) => format!("ERROR|Failed to rollback transaction: {:?}", err),
+            },
+            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
+        }
     }
 }

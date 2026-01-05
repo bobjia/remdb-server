@@ -11,6 +11,9 @@ public class RemDbConnection implements Connection {
     private PrintWriter writer;
     private BufferedReader reader;
     private boolean closed = false;
+    private boolean autoCommit = true;
+    private boolean inTransaction = false;
+    private int transactionIsolation = TRANSACTION_READ_COMMITTED;
 
     public RemDbConnection(String host, int port, String user, String password) throws SQLException {
         try {
@@ -18,8 +21,8 @@ public class RemDbConnection implements Connection {
             this.writer = new PrintWriter(socket.getOutputStream(), true);
             this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             
-            // Send AUTH command if username and password are provided
-            if (user != null && password != null) {
+            // Send AUTH command if username and password are provided and not empty
+            if (user != null && !user.isEmpty() && password != null && !password.isEmpty()) {
                 String authCommand = "AUTH|" + user + "|" + password;
                 writer.println(authCommand);
                 String response = reader.readLine();
@@ -59,25 +62,59 @@ public class RemDbConnection implements Connection {
     @Override
     public void setAutoCommit(boolean autoCommit) throws SQLException {
         checkClosed();
-        // Auto-commit is always true in RemDb
+        if (this.autoCommit == autoCommit) {
+            return;
+        }
+        
+        this.autoCommit = autoCommit;
+        
+        if (autoCommit) {
+            // If we were in a transaction, commit it
+            if (inTransaction) {
+                commit();
+            }
+        } else {
+            // Start a new transaction when autoCommit is set to false
+            beginTransaction();
+        }
     }
 
     @Override
     public boolean getAutoCommit() throws SQLException {
         checkClosed();
-        return true; // Auto-commit is always true in RemDb
+        return autoCommit;
     }
 
     @Override
     public void commit() throws SQLException {
         checkClosed();
-        // Commits are not supported in RemDb
+        if (!inTransaction) {
+            return;
+        }
+        
+        // Call commit command
+        String response = executeCommand("COMMIT");
+        if (response.startsWith("ERROR|")) {
+            throw new SQLException("Commit failed: " + response.substring(6));
+        }
+        
+        inTransaction = false;
     }
 
     @Override
     public void rollback() throws SQLException {
         checkClosed();
-        // Rollbacks are not supported in RemDb
+        if (!inTransaction) {
+            return;
+        }
+        
+        // Call rollback command
+        String response = executeCommand("ROLLBACK");
+        if (response.startsWith("ERROR|")) {
+            throw new SQLException("Rollback failed: " + response.substring(6));
+        }
+        
+        inTransaction = false;
     }
 
     @Override
@@ -109,13 +146,16 @@ public class RemDbConnection implements Connection {
     @Override
     public void setReadOnly(boolean readOnly) throws SQLException {
         checkClosed();
-        // Read-only mode is not supported in RemDb
+        // RemDb only supports read-write transactions for now
+        if (readOnly) {
+            throw new SQLFeatureNotSupportedException("Read-only transactions are not supported");
+        }
     }
 
     @Override
     public boolean isReadOnly() throws SQLException {
         checkClosed();
-        return false; // Always read-write
+        return false; // Always read-write for now
     }
 
     @Override
@@ -133,13 +173,17 @@ public class RemDbConnection implements Connection {
     @Override
     public void setTransactionIsolation(int level) throws SQLException {
         checkClosed();
-        // Transaction isolation is not supported in RemDb
+        // RemDb only supports READ_COMMITTED isolation level
+        if (level != TRANSACTION_READ_COMMITTED) {
+            throw new SQLFeatureNotSupportedException("Only READ_COMMITTED isolation level is supported");
+        }
+        this.transactionIsolation = level;
     }
 
     @Override
     public int getTransactionIsolation() throws SQLException {
         checkClosed();
-        return TRANSACTION_NONE; // No transactions
+        return transactionIsolation;
     }
 
     @Override
@@ -374,6 +418,21 @@ public class RemDbConnection implements Connection {
         if (closed) {
             throw new SQLException("Connection is closed");
         }
+    }
+    
+    // Helper method to begin a transaction
+    private void beginTransaction() throws SQLException {
+        if (inTransaction) {
+            return;
+        }
+        
+        // Call begin command directly
+        String response = executeCommand("BEGIN");
+        if (response.startsWith("ERROR|")) {
+            throw new SQLException("Begin transaction failed: " + response.substring(6));
+        }
+        
+        inTransaction = true;
     }
 
     // Internal method for executing SQL commands
