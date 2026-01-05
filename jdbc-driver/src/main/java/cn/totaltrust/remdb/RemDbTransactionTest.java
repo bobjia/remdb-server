@@ -5,14 +5,20 @@ import java.sql.*;
 public class RemDbTransactionTest {
     public static void main(String[] args) {
         String url = "jdbc:remdb://localhost:6666";
-        
+        String user = "";
+        String password = "";
+
+        Connection conn = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+
         try {
-            // Register the driver
+            System.out.println("Connecting to RemDb server...");
+            // 显式加载RemDb驱动
             Class.forName("cn.totaltrust.remdb.RemDbDriver");
-            
-            try (Connection conn = DriverManager.getConnection(url)) {
-            System.out.println("Connected to RemDb server");
-            
+            conn = DriverManager.getConnection(url);
+            System.out.println("Connection established successfully!");
+
             // Test 1: Get initial autoCommit status
             boolean initialAutoCommit = conn.getAutoCommit();
             System.out.println("\nTest 1: Initial autoCommit status: " + initialAutoCommit);
@@ -47,7 +53,6 @@ public class RemDbTransactionTest {
             
             System.out.println("All tests completed successfully!");
             
-            }
         } catch (ClassNotFoundException e) {
             System.err.println("Driver class not found: " + e.getMessage());
             e.printStackTrace();

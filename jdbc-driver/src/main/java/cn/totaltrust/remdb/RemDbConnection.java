@@ -21,8 +21,8 @@ public class RemDbConnection implements Connection {
             this.writer = new PrintWriter(socket.getOutputStream(), true);
             this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             
-            // Send AUTH command if username and password are provided and not empty
-            if (user != null && !user.isEmpty() && password != null && !password.isEmpty()) {
+            // Send AUTH command only if both username and password are non-empty
+            if (!user.isEmpty() && !password.isEmpty()) {
                 String authCommand = "AUTH|" + user + "|" + password;
                 writer.println(authCommand);
                 String response = reader.readLine();
