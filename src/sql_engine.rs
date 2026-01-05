@@ -390,7 +390,14 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
         for values in values_list {
             // 为每条记录生成自动id
             let sql_with_pk = generate_auto_inc_sql_for_batch(sql, &values)?;
-            let result = db.sql_query(&sql_with_pk)?;
+            // 检查是否需要转换为INSERT IGNORE
+            let final_sql = if sql_lower.contains("insert ignore ") {
+                // 将INSERT INTO转换为INSERT IGNORE INTO
+                sql_with_pk.replace("INSERT INTO ", "INSERT IGNORE INTO ")
+            } else {
+                sql_with_pk
+            };
+            let result = db.sql_query(&final_sql)?;
             total_affected += result.rows.len();
         }
         
@@ -410,10 +417,18 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
         // 这里我们选择将批量插入拆分为单条插入，因为batch_insert_record的生命周期要求较高
         let mut total_affected = 0;
         for values in values_list {
+            // 检查是否为INSERT IGNORE语句
+            let insert_prefix = if sql_lower.contains("insert ignore ") {
+                "INSERT IGNORE INTO "
+            } else {
+                "INSERT INTO "
+            };
+            
             // 为每条记录构建INSERT语句
             let insert_sql = format!(
-                "INSERT INTO {} ({}) VALUES ({})
+                "{}{} ({}) VALUES ({})
 ",
+                insert_prefix,
                 table_name,
                 specified_columns.join(", "),
                 values.join(", ")
@@ -640,11 +655,19 @@ fn parse_insert_parts(
 
 /// 从SQL语句中提取表名
 fn extract_table_name(sql_lower: &str) -> std::result::Result<String, SqlError> {
-    // 查找"insert"或"insert into"后的表名
+    // 查找"insert"、"insert ignore into"或"insert into"后的表名
     let after_insert = if let Some(rest) = sql_lower.strip_prefix("insert into ") {
         rest
-    } else if let Some(rest) = sql_lower.strip_prefix("insert ") {
+    } else if let Some(rest) = sql_lower.strip_prefix("insert ignore into ") {
         rest
+    } else if let Some(rest) = sql_lower.strip_prefix("insert ") {
+        // 检查是否是"insert ignore"，如果是则跳过ignore
+        if let Some(rest) = rest.strip_prefix("ignore into ") {
+            rest
+        } else {
+            // 对于"insert table_name"形式，直接返回剩余部分
+            rest
+        }
     } else {
         return Err(SqlError::Parsing("Not an INSERT statement".to_string()));
     };

@@ -56,7 +56,7 @@ public class RemDbTimeSeriesExample {
             // 5. 批量写入数据
             System.out.println("\n5. Batch writing data...");
             StringBuilder batchInsertSql = new StringBuilder();
-            batchInsertSql.append("INSERT INTO sensor_data (timestamp, value, sensor_id, location) VALUES ");
+            batchInsertSql.append("INSERT IGNORE INTO sensor_data (timestamp, value, sensor_id, location) VALUES ");
             
             for (int i = 0; i < 10; i++) {
                 long ts = currentTime + (i * 1000); // 每秒一条记录
