@@ -222,6 +222,8 @@ fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<Res
                         remdb::types::DataType::Float64 => format!("{}", value.value.float64),
                         remdb::types::DataType::Bool => format!("{}", value.value.bool),
                         remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                        remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
+                        remdb::types::DataType::Interval => format!("{}", value.value.u64),
                         remdb::types::DataType::String => {
                             let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
                             string_slice.trim_end_matches(char::from(0)).to_string()
@@ -292,6 +294,8 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                     remdb::types::DataType::Float64 => format!("{}", value.value.float64),
                     remdb::types::DataType::Bool => format!("{}", value.value.bool),
                     remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                    remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
+                    remdb::types::DataType::Interval => format!("{}", value.value.u64),
                     remdb::types::DataType::String => {
                         let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
                         string_slice.trim_end_matches(char::from(0)).to_string()
@@ -1624,6 +1628,8 @@ fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<Resu
                 remdb::types::DataType::Float64 => "DOUBLE".to_string(),
                 remdb::types::DataType::Bool => "BOOLEAN".to_string(),
                 remdb::types::DataType::Timestamp => "TIMESTAMP".to_string(),
+                remdb::types::DataType::TimestampTZ => "TIMESTAMPTZ".to_string(),
+                remdb::types::DataType::Interval => "INTERVAL".to_string(),
                 remdb::types::DataType::String => format!("VARCHAR({})", field.size),
             };
 

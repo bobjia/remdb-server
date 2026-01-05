@@ -9,27 +9,19 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 - 支持事务处理（自动提交模式）
 - 支持结果集处理
 - 支持预编译语句（PreparedStatement）
+- 支持内嵌函数调用
+- 支持时序表操作
+- 支持 CREATE TABLE 和 CREATE INDEX 语句
+- 支持 DESCRIBE TABLE 语句
 
 ## 系统要求
 
 - Java 8 或更高版本
-- RemDb Server 0.1.0 或更高版本
+- RemDb Server 0.1.24 或更高版本
 
 ## 安装方法
 
-### 方法一：使用 Gradle 编译 JAR 文件
-
-1. 编译 JDBC 驱动：
-   ```bash
-   cd jdbc-driver
-   gradle buildJdbcDriver
-   ```
-
-2. 编译后的 JAR 文件将位于 `build/libs/remdb-jdbc-driver-0.1.0.jar`
-
-3. 将该 JAR 文件添加到你的 Java 项目的类路径中
-
-### 方法二：使用 Maven 编译 JAR 文件
+### 方法一：使用 Maven 编译 JAR 文件
 
 1. 编译 JDBC 驱动：
    ```bash
@@ -41,24 +33,7 @@ RemDb JDBC Driver 是一个用于连接 RemDb 数据库服务器的 JDBC 驱动�
 
 3. 将该 JAR 文件添加到你的 Java 项目的类路径中
 
-### 方法三：使用 Maven 本地仓库（Gradle）
-
-1. 发布到本地 Maven 仓库：
-   ```bash
-   cd jdbc-driver
-   gradle publishToMavenLocal
-   ```
-
-2. 在你的 Maven 项目中添加依赖：
-   ```xml
-   <dependency>
-       <groupId>cn.totaltrust.remdb</groupId>
-       <artifactId>remdb-jdbc-driver</artifactId>
-       <version>0.1.0</version>
-   </dependency>
-   ```
-
-### 方法四：使用 Maven 本地仓库（Maven）
+### 方法二：使用 Maven 本地仓库
 
 1. 发布到本地 Maven 仓库：
    ```bash
@@ -144,14 +119,26 @@ public class RemDbExample {
 
 ### 3. 运行示例代码
 
-```bash
-# 编译示例代码
-cd jdbc-driver
-gradle compileJava
+#### 方法一：使用 Java 命令运行
 
-# 运行示例代码
-gradle runExample
-```
+1. 编译示例代码：
+   ```bash
+   cd jdbc-driver
+   javac -cp target/remdb-jdbc-driver-0.1.0.jar src/main/java/cn/totaltrust/remdb/RemDbJdbcExample.java
+   ```
+
+2. 运行示例代码：
+   ```bash
+   java -cp .;target/remdb-jdbc-driver-0.1.0.jar cn.totaltrust.remdb.RemDbJdbcExample
+   ```
+
+#### 方法二：使用 Maven 运行
+
+1. 运行示例代码：
+   ```bash
+   cd jdbc-driver
+   mvn exec:java -Dexec.mainClass="cn.totaltrust.remdb.RemDbJdbcExample"
+   ```
 
 ## JDBC URL 格式
 
@@ -176,7 +163,7 @@ jdbc:remdb://host:port
 
 | 参数名 | 类型 | 描述 | 默认值 |
 |--------|------|------|--------|
-| jdbc_port | u16 | JDBC 监听端口 | 5432 |
+| jdbc_port | u16 | JDBC 监听端口 | 6666 |
 | max_connections | usize | 最大允许的并发客户端连接数 | 100 |
 
 这些参数可以通过命令行参数或配置文件进行设置。
@@ -195,19 +182,53 @@ jdbc:remdb://host:port
 RemDb JDBC 驱动支持以下 SQL 语句：
 
 - `CREATE TABLE` - 创建表
+- `CREATE TIMESERIES TABLE` - 创建时序表
+- `CREATE INDEX` - 创建索引
+- `DESCRIBE TABLE` - 描述表结构
 - `INSERT` - 插入数据
 - `SELECT` - 查询数据
 - `UPDATE` - 更新数据
 - `DELETE` - 删除数据
 - `DROP TABLE` - 删除表
 
+### 支持的函数
+
+#### 基础统计聚合函数
+
+- `COUNT` - 统计记录数量
+- `SUM` - 计算数值总和
+- `AVG` - 计算平均值
+- `MIN` - 计算最小值
+- `MAX` - 计算最大值
+
+#### 时间窗口函数
+
+- `TIME_BUCKET` - 将时间戳分组到指定的时间窗口
+
+#### 时间间隔格式
+
+`TIME_BUCKET` 函数支持多种时间间隔格式：
+
+- 数值：微秒数
+- `ns`：纳秒
+- `us`：微秒
+- `ms`：毫秒
+- `s`/`sec`/`second`：秒
+- `m`/`min`/`minute`：分钟
+- `h`/`hr`/`hour`：小时
+- `d`/`day`：天
+- `w`/`week`：周
+
 ## 注意事项
 
 1. 目前 RemDb 不支持事务，所有操作都是自动提交的
-2. 不支持存储过程和函数
-3. 不支持视图和索引（除了主键索引）
-4. 不支持 BLOB、CLOB 等大对象类型
-5. 不支持批量操作
+2. 不支持存储过程
+3. 支持基本函数调用（聚合函数和窗口函数）
+4. 支持索引（包括主键索引和辅助索引）
+5. 不支持视图
+6. 不支持 BLOB、CLOB 等大对象类型
+7. 不支持批量操作
+8. GROUP BY 支持有限（仅与聚合函数结合使用）
 
 ## 开发计划
 
