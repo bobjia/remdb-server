@@ -6,3 +6,4 @@ snapshots/*
 /vendor/*
 remdb_history.txt
 remdb/*
+*.wal

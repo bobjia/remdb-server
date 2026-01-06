@@ -18,6 +18,7 @@ struct DdlColumn {
     primary_key: bool,
     unique: bool,
     auto_increment: bool,
+    default_value: Option<remdb::types::Value>,
 }
 
 /// DDL索引定义
@@ -244,6 +245,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     let mut primary_key = false;
     let mut unique = false;
     let mut auto_increment = false;
+    let mut default_value = None;
 
     // 将约束部分转换为小写，便于比较
     let constraints_lower = constraints_part.to_lowercase();
@@ -270,6 +272,61 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
         auto_increment = true;
     }
 
+    // 检查默认值约束
+    if let Some(default_pos) = constraints_lower.find("default") {
+        // 提取默认值部分
+        let default_part = &constraints_part[default_pos + 7..].trim();
+        
+        // 移除可能的逗号
+        let default_str = default_part.trim_end_matches(',');
+        
+        // 处理不同数据类型的默认值
+        use remdb::types::Value;
+        let parsed_default = match data_type {
+            DataType::UInt8 => Some(Value { u8: default_str.parse().unwrap_or(0) }),
+            DataType::UInt16 => Some(Value { u16: default_str.parse().unwrap_or(0) }),
+            DataType::UInt32 => Some(Value { u32: default_str.parse().unwrap_or(0) }),
+            DataType::UInt64 => Some(Value { u64: default_str.parse().unwrap_or(0) }),
+            DataType::Int8 => Some(Value { i8: default_str.parse().unwrap_or(0) }),
+            DataType::Int16 => Some(Value { i16: default_str.parse().unwrap_or(0) }),
+            DataType::Int32 => Some(Value { i32: default_str.parse().unwrap_or(0) }),
+            DataType::Int64 => Some(Value { i64: default_str.parse().unwrap_or(0) }),
+            DataType::Float32 => Some(Value { float32: default_str.parse().unwrap_or(0.0) }),
+            DataType::Float64 => Some(Value { float64: default_str.parse().unwrap_or(0.0) }),
+            DataType::Bool => {
+                let lower = default_str.to_lowercase();
+                Some(Value { bool: lower == "true" || lower == "1" })
+            },
+            DataType::String => {
+                // 移除引号
+                let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                buf[..len].copy_from_slice(str_val.as_bytes());
+                Some(Value { string: buf })
+            },
+            DataType::Timestamp | DataType::TimestampTZ => {
+                // 处理时间戳默认值
+                if default_str.eq_ignore_ascii_case("current_timestamp") {
+                    // 使用当前时间戳
+                    let now = remdb::types::time_utils::now_micros() as i64;
+                    Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                } else {
+                    // 尝试解析为数值时间戳
+                    let ts = default_str.parse().unwrap_or(0);
+                    Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                }
+            },
+            DataType::Interval => {
+                // 解析时间间隔
+                let interval_val = default_str.parse().unwrap_or(0);
+                Some(Value { interval: remdb::types::db_interval::new(interval_val, 6, 0) })
+            },
+        };
+        
+        default_value = parsed_default;
+    }
+
     Ok(DdlColumn {
         name: Box::leak(Box::new(name.to_string())) as &'static str,
         data_type,
@@ -278,6 +335,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
         primary_key,
         unique,
         auto_increment,
+        default_value,
     })
 }
 
@@ -419,7 +477,7 @@ fn create_table_def(
             primary_key: col.primary_key,
             unique: col.unique,
             auto_increment: col.auto_increment,
-            default_value: None,
+            default_value: col.default_value,
         };
 
         field_defs.push(field_def);
