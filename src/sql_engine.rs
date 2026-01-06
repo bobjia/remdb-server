@@ -356,10 +356,28 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
         let result = db.sql_query(&sql_with_pk)?;
 
         // 构造结果集
+    let affected_rows = if let Some(row) = result.rows.first() {
+        if let Some(value) = row.values.first() {
+            // 从结果中提取affected_rows值
+            unsafe {
+                match value.value_type {
+                    remdb::types::DataType::UInt64 => value.value.u64 as usize,
+                    remdb::types::DataType::Int64 => value.value.i64 as usize,
+                    remdb::types::DataType::Int32 => value.value.i32 as usize,
+                    _ => 1 // 默认值为1，表示插入成功
+                }
+            }
+        } else {
+            1 // 默认值为1，表示插入成功
+        }
+    } else {
+        1 // 默认值为1，表示插入成功
+    };
+
         return Ok(ResultSet {
-            columns: result.columns,
+            columns: Vec::new(),
             rows: Vec::new(),
-            affected_rows: result.rows.len(),
+            affected_rows,
         });
     }
 
@@ -367,10 +385,28 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     let result = db.sql_query(sql)?;
 
     // 构造结果集
+    let affected_rows = if let Some(row) = result.rows.first() {
+        if let Some(value) = row.values.first() {
+            // 从结果中提取affected_rows值
+            unsafe {
+                match value.value_type {
+                    remdb::types::DataType::UInt64 => value.value.u64 as usize,
+                    remdb::types::DataType::Int64 => value.value.i64 as usize,
+                    remdb::types::DataType::Int32 => value.value.i32 as usize,
+                    _ => result.rows.len()
+                }
+            }
+        } else {
+            result.rows.len()
+        }
+    } else {
+        result.rows.len()
+    };
+
     Ok(ResultSet {
-        columns: result.columns,
+        columns: Vec::new(),
         rows: Vec::new(),
-        affected_rows: result.rows.len(),
+        affected_rows,
     })
 }
 

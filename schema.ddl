@@ -6,7 +6,7 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     age INT,
-    created_at BIGINT NOT NULL
+    created_at timestamp(6)
 );
 
 -- 创建产品表
