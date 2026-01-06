@@ -61,3 +61,9 @@ CREATE TABLE test_types (
     datetime_col DATETIME,
     interval_col INTERVAL
 );
+
+insert into users (name, email, age, created_at) values ("bob1", "a", 1,111111);
+insert into users (name, email, age, created_at) values ("bob2", "a", 2,111111);
+insert into users (name, email, age, created_at) values ("bob3", "a", 3,111111);
+insert into users (name, email, age, created_at) values ("bob4", "a", 1,111111);
+insert into users (name, email, age, created_at) values ("bob5", "a", 4,111111);

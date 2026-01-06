@@ -1010,6 +1010,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 
     // 解析字段定义
     let mut fields = Vec::new();
+    let mut constraints = Vec::new();
     let mut primary_key_index = None;
 
     // 按逗号分割字段定义，但跳过括号内的逗号
@@ -1045,13 +1046,37 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 
                             fields.push((field_name, data_type, None)); // 添加默认值None
 
-                            // 检查是否为主键
-                            if field_parts.iter().any(|&part| {
-                                part.eq_ignore_ascii_case("PRIMARY")
-                                    && part.eq_ignore_ascii_case("KEY")
-                            }) {
-                                primary_key_index = Some(fields.len() - 1);
+                            // 检查约束
+                            let mut is_primary_key = false;
+                            let mut is_unique = false;
+                            let mut is_not_null = false;
+                            let mut is_auto_increment = false;
+
+                            // 检查主键
+                            for (j, &part) in field_parts.iter().enumerate() {
+                                if part.eq_ignore_ascii_case("PRIMARY") {
+                                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("KEY") {
+                                        is_primary_key = true;
+                                        primary_key_index = Some(fields.len() - 1);
+                                    }
+                                } else if part.eq_ignore_ascii_case("UNIQUE") {
+                                    is_unique = true;
+                                } else if part.eq_ignore_ascii_case("NOT") {
+                                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("NULL") {
+                                        is_not_null = true;
+                                    }
+                                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT") || part.eq_ignore_ascii_case("AUTOINCREMENT") {
+                                    is_auto_increment = true;
+                                }
                             }
+
+                            // 创建字段约束
+                            constraints.push(remdb::FieldConstraint {
+                                primary_key: is_primary_key,
+                                not_null: is_not_null,
+                                unique: is_unique,
+                                auto_increment: is_auto_increment,
+                            });
                         }
                     }
                     field_start = i + 1;
@@ -1083,12 +1108,37 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 
             fields.push((field_name, data_type, None)); // 添加默认值None
 
-            // 检查是否为主键
-            if field_parts.iter().any(|&part| {
-                part.eq_ignore_ascii_case("PRIMARY") && part.eq_ignore_ascii_case("KEY")
-            }) {
-                primary_key_index = Some(fields.len() - 1);
+            // 检查约束
+            let mut is_primary_key = false;
+            let mut is_unique = false;
+            let mut is_not_null = false;
+            let mut is_auto_increment = false;
+
+            // 检查主键
+            for (j, &part) in field_parts.iter().enumerate() {
+                if part.eq_ignore_ascii_case("PRIMARY") {
+                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("KEY") {
+                        is_primary_key = true;
+                        primary_key_index = Some(fields.len() - 1);
+                    }
+                } else if part.eq_ignore_ascii_case("UNIQUE") {
+                    is_unique = true;
+                } else if part.eq_ignore_ascii_case("NOT") {
+                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("NULL") {
+                        is_not_null = true;
+                    }
+                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT") || part.eq_ignore_ascii_case("AUTOINCREMENT") {
+                    is_auto_increment = true;
+                }
             }
+
+            // 创建字段约束
+            constraints.push(remdb::FieldConstraint {
+                primary_key: is_primary_key,
+                not_null: is_not_null,
+                unique: is_unique,
+                auto_increment: is_auto_increment,
+            });
         }
     }
 
@@ -1097,8 +1147,8 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         primary_key_index = Some(0);
     }
 
-    // 调用 RemDb::create_table 方法创建表
-    db.create_table(&table_name, &fields, primary_key_index)?;
+    // 调用 DdlExecutor::create_table 方法创建表，传递约束信息
+    remdb::DdlExecutor::create_table(db, &table_name, &fields, Some(&constraints), primary_key_index)?;
 
     // 构造结果集
     Ok(ResultSet {
