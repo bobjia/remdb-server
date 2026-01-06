@@ -16,6 +16,7 @@ struct DdlColumn {
     size: usize,
     nullable: bool,
     primary_key: bool,
+    unique: bool,
     auto_increment: bool,
 }
 
@@ -94,14 +95,46 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, Dd
             // 提取括号内的列定义
             let columns_content = &columns_part[1..right_paren];
 
-            // 解析列定义
+            // 解析列定义，处理括号内的逗号
             let mut columns = Vec::new();
-            for column_str in columns_content.split(',') {
-                let column_str = column_str.trim();
-                if !column_str.is_empty() {
-                    let column = parse_column_def(column_str)?;
-                    columns.push(column);
+            let mut bracket_depth = 0;
+            let mut current_column = String::new();
+            
+            for c in columns_content.chars() {
+                match c {
+                    '(' => {
+                        bracket_depth += 1;
+                        current_column.push(c);
+                    },
+                    ')' => {
+                        bracket_depth -= 1;
+                        current_column.push(c);
+                    },
+                    ',' => {
+                        if bracket_depth == 0 {
+                            // 仅当括号深度为0时才分割列
+                            let column_str = current_column.trim();
+                            if !column_str.is_empty() {
+                                let column = parse_column_def(column_str)?;
+                                columns.push(column);
+                            }
+                            current_column.clear();
+                        } else {
+                            // 括号内的逗号，保留
+                            current_column.push(c);
+                        }
+                    },
+                    _ => {
+                        current_column.push(c);
+                    }
                 }
+            }
+            
+            // 处理最后一个列
+            let column_str = current_column.trim();
+            if !column_str.is_empty() {
+                let column = parse_column_def(column_str)?;
+                columns.push(column);
             }
 
             // 生成表定义
@@ -201,6 +234,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     // 解析约束
     let mut nullable = true;
     let mut primary_key = false;
+    let mut unique = false;
     let mut auto_increment = false;
 
     // 将约束部分转换为小写，便于比较
@@ -218,6 +252,11 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
         nullable = false;
     }
 
+    // 检查UNIQUE约束
+    if constraints_lower.contains("unique") {
+        unique = true;
+    }
+
     // 检查AUTO_INCREMENT约束（支持多种写法）
     if constraints_lower.contains("auto_increment") || constraints_lower.contains("autoincrement") {
         auto_increment = true;
@@ -229,6 +268,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
         size,
         nullable,
         primary_key,
+        unique,
         auto_increment,
     })
 }
@@ -237,8 +277,17 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
 fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError> {
     let typ_lower = typ.to_lowercase();
 
-    // 处理INT类型
-    if typ_lower.starts_with("int") {
+    // 处理整数类型
+    if typ_lower.starts_with("tinyint") {
+        return Ok((DataType::Int8, 1)); // TINYINT固定1字节
+    }
+    if typ_lower.starts_with("smallint") {
+        return Ok((DataType::Int16, 2)); // SMALLINT固定2字节
+    }
+    if typ_lower.starts_with("mediumint") {
+        return Ok((DataType::Int32, 4)); // MEDIUMINT映射到Int32，固定4字节
+    }
+    if typ_lower.starts_with("int") || typ_lower.starts_with("integer") {
         // 检查是否有括号（如INT(10)）
         if let Some(left_paren) = typ_lower.find('(') {
             if let Some(right_paren) = typ_lower[left_paren..].find(')') {
@@ -251,23 +300,22 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
         }
         return Ok((DataType::Int32, 4)); // 默认大小为4字节
     }
-
-    // 处理BIGINT类型
     if typ_lower.starts_with("bigint") {
         return Ok((DataType::Int64, 8)); // BIGINT固定8字节
     }
 
-    // 处理DOUBLE类型
+    // 处理小数类型
+    if typ_lower.starts_with("decimal") || typ_lower.starts_with("numeric") {
+        return Ok((DataType::Float64, 8)); // DECIMAL/NUMERIC映射到Float64，固定8字节
+    }
+    if typ_lower.starts_with("float") || typ_lower.starts_with("real") {
+        return Ok((DataType::Float32, 4)); // FLOAT/REAL固定4字节
+    }
     if typ_lower.starts_with("double") {
         return Ok((DataType::Float64, 8)); // DOUBLE固定8字节
     }
 
-    // 处理FLOAT类型
-    if typ_lower.starts_with("float") {
-        return Ok((DataType::Float32, 4)); // FLOAT固定4字节
-    }
-
-    // 处理TEXT类型
+    // 处理字符串类型
     if typ_lower.starts_with("text") {
         // 检查是否有括号（如TEXT(255)）
         if let Some(left_paren) = typ_lower.find('(') {
@@ -281,8 +329,6 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
         }
         return Ok((DataType::String, 255)); // 默认大小为255字节
     }
-
-    // 处理VARCHAR类型
     if typ_lower.starts_with("varchar") {
         // 查找括号
         let left_paren = typ_lower.find('(').ok_or(DdlError::Parsing(format!(
@@ -306,19 +352,30 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
         return Ok((DataType::String, size));
     }
 
-    // 处理BOOLEAN类型
+    // 处理布尔类型
     if typ_lower.starts_with("boolean") || typ_lower.starts_with("bool") {
         return Ok((DataType::Bool, 1)); // BOOLEAN固定1字节
     }
 
-    // 处理DATE类型
+    // 处理日期时间类型
     if typ_lower.starts_with("date") {
         return Ok((DataType::String, 10)); // DATE格式：YYYY-MM-DD，固定10字节
     }
-
-    // 处理DATETIME类型
     if typ_lower.starts_with("datetime") {
         return Ok((DataType::String, 19)); // DATETIME格式：YYYY-MM-DD HH:MM:SS，固定19字节
+    }
+    if typ_lower.starts_with("timestamp") {
+        // 支持带时区的TIMESTAMP（TIMESTAMPTZ或TIMESTAMP WITH TIME ZONE）
+        if typ_lower.contains("with time zone") || typ_lower.contains("timestamptz") {
+            return Ok((DataType::TimestampTZ, core::mem::size_of::<remdb::types::db_timestamp>()));
+        }
+        // 普通TIMESTAMP类型
+        return Ok((DataType::Timestamp, core::mem::size_of::<remdb::types::db_timestamp>()));
+    }
+
+    // 处理时间间隔类型
+    if typ_lower.starts_with("interval") {
+        return Ok((DataType::Interval, core::mem::size_of::<remdb::types::db_interval>()));
     }
 
     // 不支持的数据类型
@@ -352,7 +409,7 @@ fn create_table_def(
             offset,
             not_null: !col.nullable,
             primary_key: col.primary_key,
-            unique: false,
+            unique: col.unique,
             auto_increment: col.auto_increment,
             default_value: None,
         };
