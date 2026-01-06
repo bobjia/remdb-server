@@ -610,16 +610,17 @@ async fn main() {
     println!("Platform initialized manually");
 
     // 解析DDL文件（如果提供）
-    let tables = if let Some(ddl_path) = ddl_path {
+    let (tables, insert_statements) = if let Some(ddl_path) = ddl_path {
         println!("Compiling DDL file: {}", ddl_path);
         match compile_ddl_file(&ddl_path) {
-            Ok(tables) => {
+            Ok((tables, insert_statements)) => {
                 println!("✓ Successfully compiled DDL file");
                 debug_println!("Debug: Compiled {} tables:", tables.len());
                 for table in &tables {
                     debug_println!("Debug: - Table: {}", table.name);
                 }
-                tables
+                debug_println!("Debug: Found {} INSERT statements", insert_statements.len());
+                (tables, insert_statements)
             }
             Err(err) => {
                 eprintln!("Error: Failed to compile DDL file: {:?}", err);
@@ -627,7 +628,7 @@ async fn main() {
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
     // 创建默认内存分配器
@@ -736,6 +737,23 @@ async fn main() {
             eprintln!("Error: Failed to load full image: {:?}", err);
         } else {
             println!("Full image loaded successfully");
+        }
+    }
+
+    // 执行DDL文件中的INSERT语句
+    if !insert_statements.is_empty() {
+        println!("Executing {} INSERT statements from DDL file", insert_statements.len());
+        for stmt in insert_statements {
+            println!("Executing: {}", stmt);
+            match sql_engine::execute_extended_sql(&mut db, &stmt) {
+                Ok(result) => {
+                    println!("✓ INSERT executed successfully, affected rows: {}", result.affected_rows);
+                },
+                Err(err) => {
+                    eprintln!("Error: Failed to execute INSERT statement: {}", err);
+                    eprintln!("Statement: {}", stmt);
+                }
+            }
         }
     }
 

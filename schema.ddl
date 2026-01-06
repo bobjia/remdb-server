@@ -5,7 +5,7 @@ CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     name varchar(16) UNIQUE NOT NULL,
     email TEXT NOT NULL,
-    age INT,
+    age INT default 20,
     created_at timestamptz(6)
 );
 
@@ -63,7 +63,7 @@ CREATE TABLE test_types (
 );
 
 insert into users (name, email, age, created_at) values ("bob1", "a", 1,111111);
-insert into users (name, email, age, created_at) values ("bob2", "a", 2,111111);
-insert into users (name, email, age, created_at) values ("bob3", "a", 3,111111);
-insert into users (name, email, age, created_at) values ("bob4", "a", 1,111111);
-insert into users (name, email, age, created_at) values ("bob5", "a", 4,111111);
+insert into users (name, email, age, created_at) values ("bob2", "a", 2,111112);
+insert into users (name, email, age, created_at) values ("bob3", "a", 3,111113);
+insert into users (name, email, age, created_at) values ("bob4", "a", 1,111211);
+insert into users (name, email, age, created_at) values ("bob5", "a", 4,111114);

@@ -28,8 +28,8 @@ struct DdlIndex {
     index_type: remdb::types::IndexType,
 }
 
-/// 编译DDL文件，生成表定义
-pub fn compile_ddl_file(file_path: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
+/// 编译DDL文件，生成表定义和INSERT语句
+pub fn compile_ddl_file(file_path: &str) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
     // 读取DDL文件内容
     let content = std::fs::read_to_string(file_path)?;
 
@@ -37,9 +37,10 @@ pub fn compile_ddl_file(file_path: &str) -> std::result::Result<Vec<TableDef>, D
     parse_ddl_content(&content)
 }
 
-/// 解析DDL内容，生成表定义
-pub fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, DdlError> {
+/// 解析DDL内容，生成表定义和INSERT语句
+pub fn parse_ddl_content(content: &str) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
     let mut tables = Vec::new();
+    let mut insert_statements = Vec::new();
     let mut table_id = 0;
 
     // 预处理：移除注释和空行，合并多行语句
@@ -89,8 +90,8 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, Dd
 
             // 查找右括号（使用rfind找到最后一个右括号，避免被VARCHAR(50)中的括号干扰）
             let right_paren = columns_part.rfind(')').ok_or(DdlError::Parsing(format!(
-                "Invalid CREATE TABLE syntax: missing ')'"
-            )))?;
+                "Invalid CREATE TABLE syntax: missing ')'")
+            ))?;
 
             // 提取括号内的列定义
             let columns_content = &columns_part[1..right_paren];
@@ -141,10 +142,17 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<Vec<TableDef>, Dd
             let table = create_table_def(table_id, table_name, &columns)?;
             tables.push(table);
             table_id += 1;
+        } else if words.len() >= 2
+            && (words[0].eq_ignore_ascii_case("INSERT") || words[0].eq_ignore_ascii_case("insert"))
+        {
+            // 处理INSERT语句
+            let insert_stmt = statement.to_string();
+            println!("Debug: Found INSERT statement: {}", insert_stmt);
+            insert_statements.push(insert_stmt);
         }
     }
 
-    Ok(tables)
+    Ok((tables, insert_statements))
 }
 
 /// 解析索引定义
