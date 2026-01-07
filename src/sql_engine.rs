@@ -1044,7 +1044,72 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                 _ => remdb::types::DataType::String, // 默认使用String类型
                             };
 
-                            fields.push((field_name, data_type, None)); // 添加默认值None
+                            // 处理默认值
+                            let mut default_value: Option<remdb::types::Value> = None;
+                            let field_def_lower = field_def.to_lowercase();
+                            if let Some(default_pos) = field_def_lower.find("default") {
+                                // 提取默认值部分
+                                let default_part = field_def[default_pos + 7..].trim();
+                                
+                                // 移除可能的逗号和后续约束
+                                let mut default_str = default_part;
+                                if let Some(comma_pos) = default_str.find(',') {
+                                    default_str = &default_str[..comma_pos].trim();
+                                } else {
+                                    // 移除后续约束关键字
+                                    for keyword in ["primary", "unique", "not", "auto_increment", "autoincrement"] {
+                                        if let Some(key_pos) = default_str.to_lowercase().find(keyword) {
+                                            default_str = &default_str[..key_pos].trim();
+                                            break;
+                                        }
+                                    }
+                                }
+                                default_str = default_str.trim_end_matches(',');
+                                
+                                // 根据数据类型转换默认值
+                                use remdb::types::Value;
+                                default_value = match data_type {
+                                    remdb::types::DataType::Int32 => {
+                                        Some(Value { i32: default_str.parse().unwrap_or(0) })
+                                    },
+                                    remdb::types::DataType::Int64 => {
+                                        Some(Value { i64: default_str.parse().unwrap_or(0) })
+                                    },
+                                    remdb::types::DataType::Float32 => {
+                                        Some(Value { float32: default_str.parse().unwrap_or(0.0) })
+                                    },
+                                    remdb::types::DataType::Float64 => {
+                                        Some(Value { float64: default_str.parse().unwrap_or(0.0) })
+                                    },
+                                    remdb::types::DataType::Bool => {
+                                        let lower = default_str.to_lowercase();
+                                        Some(Value { bool: lower == "true" || lower == "1" })
+                                    },
+                                    remdb::types::DataType::String => {
+                                        // 移除引号
+                                        let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                                        let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                                        buf[..len].copy_from_slice(str_val.as_bytes());
+                                        Some(Value { string: buf })
+                                    },
+                                    remdb::types::DataType::Timestamp => {
+                                        // 处理时间戳默认值
+                                        if default_str.eq_ignore_ascii_case("current_timestamp") {
+                                            // 使用当前时间戳
+                                            let now = remdb::types::time_utils::now_micros() as i64;
+                                            Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                                        } else {
+                                            // 尝试解析为数值时间戳
+                                            let ts = default_str.parse().unwrap_or(0);
+                                            Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                                        }
+                                    },
+                                    _ => None,
+                                };
+                            }
+
+                            fields.push((field_name, data_type, default_value)); // 添加带有默认值的字段
 
                             // 检查约束
                             let mut is_primary_key = false;
@@ -1106,7 +1171,72 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 _ => remdb::types::DataType::String, // 默认使用String类型
             };
 
-            fields.push((field_name, data_type, None)); // 添加默认值None
+            // 处理默认值
+            let mut default_value: Option<remdb::types::Value> = None;
+            let field_def_lower = last_field.to_lowercase();
+            if let Some(default_pos) = field_def_lower.find("default") {
+                // 提取默认值部分
+                let default_part = last_field[default_pos + 7..].trim();
+                
+                // 移除可能的逗号和后续约束
+                let mut default_str = default_part;
+                if let Some(comma_pos) = default_str.find(',') {
+                    default_str = &default_str[..comma_pos].trim();
+                } else {
+                    // 移除后续约束关键字
+                    for keyword in ["primary", "unique", "not", "auto_increment", "autoincrement"] {
+                        if let Some(key_pos) = default_str.to_lowercase().find(keyword) {
+                            default_str = &default_str[..key_pos].trim();
+                            break;
+                        }
+                    }
+                }
+                default_str = default_str.trim_end_matches(',');
+                
+                // 根据数据类型转换默认值
+                use remdb::types::Value;
+                default_value = match data_type {
+                    remdb::types::DataType::Int32 => {
+                        Some(Value { i32: default_str.parse().unwrap_or(0) })
+                    },
+                    remdb::types::DataType::Int64 => {
+                        Some(Value { i64: default_str.parse().unwrap_or(0) })
+                    },
+                    remdb::types::DataType::Float32 => {
+                        Some(Value { float32: default_str.parse().unwrap_or(0.0) })
+                    },
+                    remdb::types::DataType::Float64 => {
+                        Some(Value { float64: default_str.parse().unwrap_or(0.0) })
+                    },
+                    remdb::types::DataType::Bool => {
+                        let lower = default_str.to_lowercase();
+                        Some(Value { bool: lower == "true" || lower == "1" })
+                    },
+                    remdb::types::DataType::String => {
+                        // 移除引号
+                        let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                        let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                        buf[..len].copy_from_slice(str_val.as_bytes());
+                        Some(Value { string: buf })
+                    },
+                    remdb::types::DataType::Timestamp => {
+                        // 处理时间戳默认值
+                        if default_str.eq_ignore_ascii_case("current_timestamp") {
+                            // 使用当前时间戳
+                            let now = remdb::types::time_utils::now_micros() as i64;
+                            Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                        } else {
+                            // 尝试解析为数值时间戳
+                            let ts = default_str.parse().unwrap_or(0);
+                            Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                        }
+                    },
+                    _ => None,
+                };
+            }
+
+            fields.push((field_name, data_type, default_value)); // 添加带有默认值的字段
 
             // 检查约束
             let mut is_primary_key = false;
