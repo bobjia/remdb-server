@@ -512,9 +512,9 @@ mod tests {
         match parse_ddl_content(create_table_sql) {
             Ok(tables) => {
                 // Verify that one table was created
-                assert_eq!(tables.len(), 1, "Expected 1 table, got {}", tables.len());
+                assert_eq!(tables.0.len(), 1, "Expected 1 table, got {}", tables.0.len());
 
-                let table = &tables[0];
+                let table = &tables.0[0];
                 assert_eq!(
                     table.name, "iot_devices",
                     "Expected table name 'iot_devices', got '{}'",

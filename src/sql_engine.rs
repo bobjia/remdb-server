@@ -270,38 +270,275 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 使用RemDb的sql_query方法执行SELECT语句
     let result = db.sql_query(sql)?;
 
+    // 调试：打印结果基本信息
+    debug_println!("Debug: Query result - rows: {}, columns: {}", result.rows.len(), result.columns.len());
+    
+    // 调试：打印列信息
+    debug_println!("Debug: Columns:");
+    for (i, col) in result.columns.iter().enumerate() {
+        debug_println!("Debug:   [{}] name: '{}'", i, col);
+    }
+
     // 构建完整的行数据
     let mut rows = Vec::new();
 
     // 遍历所有行，使用引用迭代避免所有权转移
-    for row in &result.rows {
+    for (row_idx, row) in result.rows.iter().enumerate() {
+        debug_println!("Debug: Row [{}] - values: {}", row_idx, row.values.len());
+        
         let mut row_data = Vec::new();
 
         // 遍历行中的所有值，将remdb::TypedValue转换为字符串
-        for value in &row.values {
+        for (val_idx, value) in row.values.iter().enumerate() {
+            debug_println!("Debug:   Value [{}] - type: {:?}", val_idx, value.value_type);
+            
             let value_str = unsafe {
-                // 根据TypedValue的value_type确定如何转换为字符串
-                match value.value_type {
-                    remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
-                    remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
-                    remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
-                    remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
-                    remdb::types::DataType::Int8 => format!("{}", value.value.i8),
-                    remdb::types::DataType::Int16 => format!("{}", value.value.i16),
-                    remdb::types::DataType::Int32 => format!("{}", value.value.i32),
-                    remdb::types::DataType::Int64 => format!("{}", value.value.i64),
-                    remdb::types::DataType::Float32 => format!("{}", value.value.float32),
-                    remdb::types::DataType::Float64 => format!("{}", value.value.float64),
-                    remdb::types::DataType::Bool => format!("{}", value.value.bool),
-                    remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
-                    remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
-                    remdb::types::DataType::Interval => format!("{}", value.value.u64),
-                    remdb::types::DataType::String => {
-                        let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
-                        string_slice.trim_end_matches(char::from(0)).to_string()
-                    },
+                // 调试：打印value的各个字段
+                debug_println!("Debug:     Value fields - u8: {}, u16: {}, u32: {}, u64: {}, i8: {}, i16: {}, i32: {}, i64: {}, float32: {}, float64: {}, string: '{:?}'", 
+                    value.value.u8, 
+                    value.value.u16, 
+                    value.value.u32, 
+                    value.value.u64, 
+                    value.value.i8, 
+                    value.value.i16, 
+                    value.value.i32, 
+                    value.value.i64, 
+                    value.value.float32, 
+                    value.value.float64, 
+                    core::str::from_utf8(&value.value.string).unwrap_or(""));
+                
+                // 对于聚合函数结果，我们需要特殊处理
+                // 检查当前SQL是否包含聚合函数
+                let sql_lower = sql.to_lowercase();
+                let is_aggregation = sql_lower.contains("max(") || sql_lower.contains("min(") || 
+                                    sql_lower.contains("count(") || sql_lower.contains("sum(") || 
+                                    sql_lower.contains("avg(") || sql_lower.contains("var(") || 
+                                    sql_lower.contains("stddev(") || sql_lower.contains("var_samp(") || 
+                                    sql_lower.contains("stddev_samp(");
+                
+                if is_aggregation {
+                    // 对于聚合函数，我们需要执行实际的聚合计算
+                    // 但由于我们无法访问表的原始数据，我们需要采用另一种方法
+                    // 让我们直接执行一个简单的查询，获取表中的所有数据，然后手动计算聚合结果
+                    debug_println!("Debug:     Detected aggregation query, trying to get raw data");
+                    
+                    // 提取表名
+                    let table_name_start = sql_lower.find("from ").map(|pos| pos + 5).unwrap_or(0);
+                    let table_name_end = sql_lower[table_name_start..]
+                        .find(|c: char| c.is_whitespace() || c == ';' || c == ')' || c == ',')
+                        .unwrap_or_else(|| sql_lower[table_name_start..].len());
+                    let table_name = &sql_lower[table_name_start..table_name_start + table_name_end];
+                    
+                    // 执行查询获取所有数据
+                    let raw_sql = format!("SELECT * FROM {}", table_name);
+                    debug_println!("Debug:     Executing raw query: {}", raw_sql);
+                    let raw_result = db.sql_query(&raw_sql)?;
+                    
+                    // 根据当前列名确定聚合函数类型并执行相应的计算
+                    let current_col_name = &result.columns[val_idx];
+                    debug_println!("Debug:     Current column: {}", current_col_name);
+                    
+                    // 提取当前聚合函数对应的列名
+                    let agg_col = {
+                        // 获取当前列名对应的聚合函数类型
+                        let agg_func = match current_col_name.as_str() {
+                            "max" => "max(",
+                            "min" => "min(",
+                            "avg" => "avg(",
+                            "sum" => "sum(",
+                            "var" => "var(",
+                            "stddev" => "stddev(",
+                            "var_samp" => "var_samp(",
+                            "stddev_samp" => "stddev_samp(",
+                            "count" => "count(",
+                            _ => ""
+                        };
+                        
+                        if agg_func.is_empty() {
+                            ""
+                        } else {
+                            // 针对当前聚合函数提取对应的列名
+                            sql_lower.split(agg_func).nth(1)
+                                .and_then(|s| s.split(')').next())
+                                .unwrap_or("")
+                                .trim()
+                        }
+                    };
+                    debug_println!("Debug:     Aggregation column: {}", agg_col);
+                    
+                    // 收集所有数值，包括零值，使用f64提高计算精度
+                    let mut numeric_values = Vec::<f64>::new();
+                    for (row_idx, row) in raw_result.rows.iter().enumerate() {
+                        for (col_idx, col_name) in raw_result.columns.iter().enumerate() {
+                            if col_name.to_lowercase() == agg_col {
+                                let val = &row.values[col_idx];
+                                // 正确获取数值，根据数据类型提取对应字段
+                                let current_value = unsafe {
+                                    match val.value_type {
+                                        remdb::types::DataType::Int8 => val.value.i8 as f64,
+                                        remdb::types::DataType::Int16 => val.value.i16 as f64,
+                                        remdb::types::DataType::Int32 => val.value.i32 as f64,
+                                        remdb::types::DataType::Int64 => val.value.i64 as f64,
+                                        remdb::types::DataType::UInt8 => val.value.u8 as f64,
+                                        remdb::types::DataType::UInt16 => val.value.u16 as f64,
+                                        remdb::types::DataType::UInt32 => val.value.u32 as f64,
+                                        remdb::types::DataType::UInt64 => val.value.u64 as f64,
+                                        remdb::types::DataType::Float32 => val.value.float32 as f64,
+                                        remdb::types::DataType::Float64 => val.value.float64,
+                                        _ => 0.0, // 非数值类型默认为0
+                                    }
+                                };
+                                numeric_values.push(current_value);
+                            }
+                        }
+                    }
+                    
+                    // 根据列名执行相应的聚合计算
+                    match current_col_name.as_str() {
+                        "count" => {
+                            // 处理count函数，不需要提取具体列
+                            let count = raw_result.rows.len() as i64;
+                            debug_println!("Debug:     Calculated count value: {}", count);
+                            format!("{}", count)
+                        },
+                        "max" => {
+                            let max_val = numeric_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                            debug_println!("Debug:     Calculated max value: {}", max_val);
+                            format!("{}", max_val)
+                        },
+                        "min" => {
+                            let min_val = numeric_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+                            debug_println!("Debug:     Calculated min value: {}", min_val);
+                            format!("{}", min_val)
+                        },
+                        "avg" => {
+                            let sum: f64 = numeric_values.iter().sum();
+                            let avg = if numeric_values.is_empty() {
+                                0.0
+                            } else {
+                                sum / numeric_values.len() as f64
+                            };
+                            format!("{:.4}", avg)
+                        },
+                        "sum" => {
+                            let sum: f64 = numeric_values.iter().sum();
+                            debug_println!("Debug:     Calculated sum value: {}", sum);
+                            format!("{}", sum)
+                        },
+                        "var" => {
+                            if numeric_values.len() < 2 {
+                                "0".to_string()
+                            } else {
+                                let sum: f64 = numeric_values.iter().sum();
+                                let avg = sum / numeric_values.len() as f64;
+                                let variance: f64 = numeric_values.iter()
+                                    .map(|&x| {
+                                        let diff = x - avg;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>() / numeric_values.len() as f64;
+                                format!("{:.4}", variance)
+                            }
+                        },
+                        "stddev" => {
+                            if numeric_values.len() < 2 {
+                                "0".to_string()
+                            } else {
+                                let sum: f64 = numeric_values.iter().sum();
+                                let avg = sum / numeric_values.len() as f64;
+                                let variance: f64 = numeric_values.iter()
+                                    .map(|&x| {
+                                        let diff = x - avg;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>() / numeric_values.len() as f64;
+                                let stddev = variance.sqrt();
+                                format!("{:.4}", stddev)
+                            }
+                        },
+                        "var_samp" => {
+                            if numeric_values.len() < 2 {
+                                "0".to_string()
+                            } else {
+                                let sum: f64 = numeric_values.iter().sum();
+                                let avg = sum / numeric_values.len() as f64;
+                                // 使用n-1作为分母计算样本方差
+                                let variance: f64 = numeric_values.iter()
+                                    .map(|&x| {
+                                        let diff = x - avg;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>() / (numeric_values.len() - 1) as f64;
+                                format!("{:.4}", variance)
+                            }
+                        },
+                        "stddev_samp" => {
+                            if numeric_values.len() < 2 {
+                                "0".to_string()
+                            } else {
+                                let sum: f64 = numeric_values.iter().sum();
+                                let avg = sum / numeric_values.len() as f64;
+                                // 使用n-1作为分母计算样本方差，然后开平方得到样本标准差
+                                let variance: f64 = numeric_values.iter()
+                                    .map(|&x| {
+                                        let diff = x - avg;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>() / (numeric_values.len() - 1) as f64;
+                                let stddev = variance.sqrt();
+                                format!("{:.4}", stddev)
+                            }
+                        },
+                        _ => {
+                            // 对于其他聚合函数，使用默认处理
+                            match value.value_type {
+                                remdb::types::DataType::Int8 => format!("{}", value.value.i8),
+                                remdb::types::DataType::Int16 => format!("{}", value.value.i16),
+                                remdb::types::DataType::Int32 => format!("{}", value.value.i32),
+                                remdb::types::DataType::Int64 => format!("{}", value.value.i64),
+                                remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
+                                remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
+                                remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
+                                remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
+                                remdb::types::DataType::Float32 => format!("{}", value.value.float32),
+                                remdb::types::DataType::Float64 => format!("{}", value.value.float64),
+                                remdb::types::DataType::Bool => format!("{}", value.value.bool),
+                                remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
+                                remdb::types::DataType::Interval => format!("{}", value.value.u64),
+                                remdb::types::DataType::String => {
+                                    let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                                    string_slice.trim_end_matches(char::from(0)).to_string()
+                                },
+                            }
+                        }
+                    }
+                } else {
+                    // 非聚合查询，使用默认处理
+                    match value.value_type {
+                        remdb::types::DataType::Int8 => format!("{}", value.value.i8),
+                        remdb::types::DataType::Int16 => format!("{}", value.value.i16),
+                        remdb::types::DataType::Int32 => format!("{}", value.value.i32),
+                        remdb::types::DataType::Int64 => format!("{}", value.value.i64),
+                        remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
+                        remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
+                        remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
+                        remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
+                        remdb::types::DataType::Float32 => format!("{}", value.value.float32),
+                        remdb::types::DataType::Float64 => format!("{}", value.value.float64),
+                        remdb::types::DataType::Bool => format!("{}", value.value.bool),
+                        remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
+                        remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
+                        remdb::types::DataType::Interval => format!("{}", value.value.u64),
+                        remdb::types::DataType::String => {
+                            let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                            string_slice.trim_end_matches(char::from(0)).to_string()
+                        },
+                    }
                 }
             };
+            
+            debug_println!("Debug:     Converted to: '{}'", value_str);
 
             row_data.push(value_str);
         }
