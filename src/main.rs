@@ -20,16 +20,16 @@ use std::time::SystemTime;
 use tokio::sync::Mutex;
 
 // 全局debug模式开关
-static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+static DEBUG_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 设置debug模式
 pub fn set_debug_mode(enabled: bool) {
-    DEBUG_MODE.store(enabled, Ordering::Relaxed);
+    DEBUG_MODE.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 检查是否开启了debug模式
 pub fn is_debug_mode() -> bool {
-    DEBUG_MODE.load(Ordering::Relaxed)
+    DEBUG_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 调试日志宏，只有在debug模式下才输出
@@ -529,7 +529,10 @@ async fn main() {
     }
 
     // 合并配置：命令行参数优先级高于配置文件
-    let ddl_path = args.ddl.or(config.ddl);
+    let ddl_path = match args.ddl.or(config.ddl) {
+        Some(path) if !path.is_empty() => Some(path),
+        _ => None,
+    };
     let snapshot_dir = args.snapshot_dir.or(config.snapshot_dir);
     let full_image = args.full_image.clone();
     let total_memory = args.total_memory.or(config.total_memory);
@@ -756,6 +759,40 @@ async fn main() {
             }
         }
     }
+    
+    // 测试healthcheck命令
+    if args.test_export {
+        println!("\n=== Testing HEALTHCHECK command ===");
+        match sql_engine::execute_extended_sql(&mut db, "healthcheck") {
+            Ok(result) => {
+                println!("\nHealthcheck result:");
+                println!("+--------------------+----------+------------------------------------------------------------------+");
+                for (i, row) in result.rows.iter().enumerate() {
+                    if i == 0 {
+                        // 打印列名
+                        for col in &result.columns {
+                            print!("| {:<18} ", col);
+                        }
+                        println!("|");
+                        println!("+--------------------+----------+------------------------------------------------------------------+");
+                    }
+                    for (j, value) in row.iter().enumerate() {
+                        let width = match j {
+                            0 => 18,
+                            1 => 8,
+                            _ => 50,
+                        };
+                        print!("| {:width$} ", value, width = width);
+                    }
+                    println!("|");
+                }
+                println!("+--------------------+----------+------------------------------------------------------------------+");
+            },
+            Err(err) => {
+                eprintln!("Error: Failed to execute healthcheck: {}", err);
+            }
+        }
+    }
 
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
     let db_arc = Arc::new(Mutex::new(db));
@@ -847,6 +884,8 @@ async fn main() {
                 pubsub_port
             );
         }
+    } else {
+        println!("PubSub server is disabled");
     }
 
     // 启动交互式控制台（如果启用且不是非交互式模式）
