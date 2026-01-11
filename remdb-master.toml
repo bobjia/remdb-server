@@ -18,6 +18,25 @@ low_power_max_records = 10000
 # 单表的最大记录数（用于动态创建表）
 default_max_records = 10000
 
+
+
+# WAL配置
+[wal]
+# 日志文件路径
+log_path = "./wal"
+# 日志模式，可选值：async, sync
+log_mode = "async"
+# 检查点间隔（毫秒），默认30000
+checkpoint_interval_ms = 30000
+# 日志文件大小限制（字节），默认16MB
+log_file_size_limit = 16777216
+# 日志预分配大小（字节），默认4MB
+log_prealloc_size = 4194304
+# 日志段大小（字节），默认16MB
+log_segment_size = 16777216
+# 保留的检查点数量，默认3
+retained_checkpoints = 3
+
 # JDBC服务配置
 # 是否启用JDBC服务
 jdbc_enabled = true
@@ -50,6 +69,9 @@ max_retransmissions = 5
 # 是否启用高可用功能
 enabled = true
 
+# 节点ID
+node_id = 1
+
 # 节点角色（master/slave）
 role = "master"
 
@@ -66,7 +88,10 @@ failure_detection_ms = 5000
 sync_timeout_ms = 2000
 
 # 主节点地址（仅slave节点需要）
-master_address = ""
+# master_address = ""
 
 # 主节点端口（仅slave节点需要）
 # master_port = 
+
+# 复制端口（用于WAL日志复制和数据同步）
+replication_port = 6668

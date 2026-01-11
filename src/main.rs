@@ -4,23 +4,24 @@ mod jdbc_server;
 mod snapshot_loader;
 mod sql_engine;
 
-use crate::cli::run_cli;
+use remdb::{ha::{HARole, ReplicationMode}, RemDb};
 use crate::ddl_compiler::compile_ddl_file;
 use crate::jdbc_server::JdbcServer;
-use crate::snapshot_loader::load_snapshot_from_dir;
-use crate::sql_engine::{execute_extended_sql, format_result_set};
 use clap::Parser;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
 use serde::Deserialize;
 use std::fs;
-use std::io::{Read, Seek, Write};
-use std::sync::Arc;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as TokioMutex;
 
 // 全局debug模式开关
 static DEBUG_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// 全局日志文件句柄
+static mut LOG_FILE_HANDLE: Option<Arc<Mutex<std::fs::File>>> = None;
 
 /// 设置debug模式
 pub fn set_debug_mode(enabled: bool) {
@@ -32,12 +33,53 @@ pub fn is_debug_mode() -> bool {
     DEBUG_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// 设置日志文件
+pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
+    // 创建日志目录
+    std::fs::create_dir_all(log_path)?;
+    
+    // 获取当前日期作为日志文件名
+    let now = SystemTime::now();
+    let timestamp = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+    let log_file_path = format!("{}/remdb-server-{}.log", log_path, timestamp);
+    
+    // 打开日志文件，以追加模式写入
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .write(true)
+        .open(log_file_path)?;
+    
+    // 将文件句柄包装到Arc<Mutex>中，以便多线程安全访问
+    let file_handle = Arc::new(Mutex::new(file));
+    
+    // 保存到全局变量
+    unsafe {
+        LOG_FILE_HANDLE = Some(file_handle);
+    }
+    
+    Ok(())
+}
+
+/// 写入日志到文件
+pub fn write_log_to_file(message: &str) {
+    unsafe {
+        if let Some(ref file_handle) = LOG_FILE_HANDLE {
+            if let Ok(mut file) = file_handle.lock() {
+                let _ = writeln!(file, "{}", message);
+            }
+        }
+    }
+}
+
 /// 调试日志宏，只有在debug模式下才输出
 #[macro_export]
 macro_rules! debug_println {
     ($($args:tt)*) => {
         if $crate::is_debug_mode() {
-            println!($($args)*);
+            let message = format!($($args)*);
+            println!("{}", message);
+            $crate::write_log_to_file(&message);
         }
     };
 }
@@ -47,7 +89,31 @@ macro_rules! debug_println {
 macro_rules! debug_eprintln {
     ($($args:tt)*) => {
         if $crate::is_debug_mode() {
-            eprintln!($($args)*);
+            let message = format!($($args)*);
+            eprintln!("{}", message);
+            $crate::write_log_to_file(&message);
+        }
+    };
+}
+
+/// 重定义标准println宏，使其同时输出到控制台和日志文件
+macro_rules! log_println {
+    ($($args:tt)*) => {
+        {
+            let message = format!($($args)*);
+            println!("{}", message);
+            $crate::write_log_to_file(&message);
+        }
+    };
+}
+
+/// 重定义标准eprintln宏，使其同时输出到控制台和日志文件
+macro_rules! log_eprintln {
+    ($($args:tt)*) => {
+        {
+            let message = format!($($args)*);
+            eprintln!("{}", message);
+            $crate::write_log_to_file(&message);
         }
     };
 }
@@ -260,11 +326,39 @@ impl remdb::platform::Platform for WindowsPlatform {
 // 创建静态平台实例
 static WINDOWS_PLATFORM: WindowsPlatform = WindowsPlatform;
 
+/// WAL配置
+#[derive(Deserialize, Debug, Default)]
+struct WALConfig {
+    /// 日志文件路径
+    log_path: Option<String>,
+    
+    /// 日志模式，可选值：async, sync
+    log_mode: Option<String>,
+    
+    /// 检查点间隔（毫秒）
+    checkpoint_interval_ms: Option<u64>,
+    
+    /// 日志文件大小限制（字节）
+    log_file_size_limit: Option<usize>,
+    
+    /// 日志预分配大小（字节）
+    log_prealloc_size: Option<usize>,
+    
+    /// 日志段大小（字节）
+    log_segment_size: Option<usize>,
+    
+    /// 保留的检查点数量
+    retained_checkpoints: Option<usize>,
+}
+
 /// 高可用配置
 #[derive(Deserialize, Debug, Default)]
 struct HaConfig {
     /// 是否启用高可用功能
     enabled: Option<bool>,
+
+    /// 节点ID
+    node_id: Option<String>,
 
     /// 节点角色（master/slave）
     role: Option<String>,
@@ -285,7 +379,10 @@ struct HaConfig {
     master_address: Option<String>,
 
     /// 主节点端口（仅slave节点需要）
-    master_port: Option<u16>,
+    master_port: Option<u16>,    
+
+    /// 复制端口（用于WAL日志复制和数据同步）
+    replication_port: Option<u16>,    
 }
 
 /// 配置文件结构体
@@ -308,6 +405,9 @@ struct Config {
 
     /// 低功耗模式下的最大记录数
     low_power_max_records: Option<usize>,
+    
+    /// 日志文件路径
+    log_path: Option<String>,
 
     /// 增量快照周期（秒）
     snapshot_interval: Option<u64>,
@@ -340,6 +440,9 @@ struct Config {
 
     /// pubsub配置
     pubsub: Option<PubSubConfig>,
+
+    /// WAL配置
+    wal: Option<WALConfig>,
 
     /// 高可用配置
     ha: Option<HaConfig>,
@@ -398,6 +501,10 @@ struct Args {
     /// 低功耗模式下的最大记录数
     #[arg(long)]
     low_power_max_records: Option<usize>,
+    
+    /// 日志文件路径
+    #[arg(long)]
+    log_path: Option<String>,
 
     /// 增量快照周期（秒）
     #[arg(long)]
@@ -498,32 +605,51 @@ struct Args {
     /// 主节点端口（仅slave节点需要）
     #[arg(long)]
     ha_master_port: Option<u16>,
+    
+    /// 复制端口（用于WAL日志复制和数据同步）
+    #[arg(long)]
+    ha_replication_port: Option<u16>,
+    
+    /// 心跳端口（用于节点间心跳检测）
+    #[arg(long)]
+    ha_heartbeat_port: Option<u16>,
+
+    /// 节点ID
+    #[arg(long)]
+    ha_node_id: Option<String>,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
 
-    println!("remdb-server v0.1.0");
+    let message = "remdb-server v0.1.0";
+    println!("{}", message);
 
     // 读取配置文件
     let mut config = Config::default();
     if let Some(config_path) = &args.config {
-        println!("Reading config file: {}", config_path);
+        let message = format!("Reading config file: {}", config_path);
+        println!("{}", message);
         match fs::read_to_string(config_path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(parsed_config) => {
                     config = parsed_config;
-                    println!("Config file loaded successfully");
+                    let message = "Config file loaded successfully";
+                    println!("{}", message);
                 }
                 Err(err) => {
-                    eprintln!("Warning: Failed to parse config file: {:?}", err);
-                    eprintln!("Using default config values");
+                    let message = format!("Warning: Failed to parse config file: {:?}", err);
+                    eprintln!("{}", message);
+                    let message = "Using default config values";
+                    eprintln!("{}", message);
                 }
             },
             Err(err) => {
-                eprintln!("Warning: Failed to read config file: {:?}", err);
-                eprintln!("Using default config values");
+                let message = format!("Warning: Failed to read config file: {:?}", err);
+                eprintln!("{}", message);
+                let message = "Using default config values";
+                eprintln!("{}", message);
             }
         }
     }
@@ -537,10 +663,20 @@ async fn main() {
     let full_image = args.full_image.clone();
     let total_memory = args.total_memory.or(config.total_memory);
     let default_max_records = args.default_max_records.or(config.default_max_records);
+    // 合并WAL配置
+    let wal_log_path = config.wal.as_ref().and_then(|w| w.log_path.clone());
+    let wal_log_mode = config.wal.as_ref().and_then(|w| w.log_mode.clone());
+    let wal_checkpoint_interval_ms = config.wal.as_ref().and_then(|w| w.checkpoint_interval_ms);
+    let wal_log_file_size_limit = config.wal.as_ref().and_then(|w| w.log_file_size_limit);
+    let wal_log_prealloc_size = config.wal.as_ref().and_then(|w| w.log_prealloc_size);
+    let wal_log_segment_size = config.wal.as_ref().and_then(|w| w.log_segment_size);
+    let wal_retained_checkpoints = config.wal.as_ref().and_then(|w| w.retained_checkpoints);
+    
     let low_power_mode_supported = args
         .low_power_mode_supported
         .or(config.low_power_mode_supported);
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
+    let log_path = args.log_path.or(wal_log_path).or(config.log_path);
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
     let max_incremental_snapshots = args
         .max_incremental_snapshots
@@ -578,6 +714,9 @@ async fn main() {
     let ha_enabled = args
         .ha_enabled
         .or(config.ha.as_ref().and_then(|h| h.enabled));
+    let ha_node_id = args
+        .ha_node_id
+        .or(config.ha.as_ref().and_then(|h| h.node_id.clone()));
     let ha_role = args
         .ha_role
         .or(config.ha.as_ref().and_then(|h| h.role.clone()));
@@ -599,25 +738,39 @@ async fn main() {
     let ha_master_port = args
         .ha_master_port
         .or(config.ha.as_ref().and_then(|h| h.master_port));
+    let ha_replication_port = args
+        .ha_replication_port
+        .or(config.ha.as_ref().and_then(|h| h.replication_port));
 
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
     set_debug_mode(debug_mode);
     if debug_mode {
-        println!("Debug mode enabled");
+        let message = "Debug mode enabled";
+        println!("{}", message);
+    }
+    
+    // 初始化日志文件
+    let log_file_path = log_path.clone().unwrap_or("./logs".to_string());
+    if let Err(err) = set_log_file(&log_file_path) {
+        let message = format!("Warning: Failed to initialize log file: {:?}", err);
+        eprintln!("{}", message);
+    } else {
+        let message = format!("Log file initialized at: {}", log_file_path);
+        println!("{}", message);
     }
 
     // 手动初始化平台
-    println!("Manually initializing platform...");
+    log_println!("Manually initializing platform...");
     remdb::platform::init_platform(&WINDOWS_PLATFORM);
-    println!("Platform initialized manually");
+    log_println!("Platform initialized manually");
 
     // 解析DDL文件（如果提供）
     let (tables, insert_statements) = if let Some(ddl_path) = ddl_path {
-        println!("Compiling DDL file: {}", ddl_path);
+        log_println!("Compiling DDL file: {}", ddl_path);
         match compile_ddl_file(&ddl_path) {
             Ok((tables, insert_statements)) => {
-                println!("✓ Successfully compiled DDL file");
+                log_println!("✓ Successfully compiled DDL file");
                 debug_println!("Debug: Compiled {} tables:", tables.len());
                 for table in &tables {
                     debug_println!("Debug: - Table: {}", table.name);
@@ -626,7 +779,7 @@ async fn main() {
                 (tables, insert_statements)
             }
             Err(err) => {
-                eprintln!("Error: Failed to compile DDL file: {:?}", err);
+                log_eprintln!("Error: Failed to compile DDL file: {:?}", err);
                 return;
             }
         }
@@ -649,23 +802,28 @@ async fn main() {
 
     // 根据配置设置节点角色
     let ha_role = if !ha_enabled {
-        remdb::config::HARole::Master // 未启用高可用时默认为独立master
+        HARole::Master // 未启用高可用时默认为独立master
     } else {
         match ha_role.as_deref() {
-            Some("slave") | Some("Slave") => remdb::config::HARole::Slave,
-            _ => remdb::config::HARole::Master,
+            Some("slave") | Some("Slave") => HARole::Slave,
+            _ => HARole::Master,
         }
     };
 
     // 根据配置设置复制模式
     let replication_mode = match ha_replication_mode.as_deref() {
-        Some("sync") | Some("Sync") => remdb::config::ReplicationMode::Sync,
-        _ => remdb::config::ReplicationMode::Async,
+        Some("sync") | Some("Sync") => ReplicationMode::Sync,
+        _ => ReplicationMode::Async,
     };
 
     // 处理主节点地址，转换为&'static str
-    let master_address =
+    let master_address = 
         ha_master_address.map(|addr| Box::leak(addr.into_boxed_str()) as &'static str);
+
+    // 处理节点ID，转换为u32类型
+    let node_id = ha_node_id.as_deref()
+        .and_then(|id| id.parse::<u32>().ok())
+        .unwrap_or(1); // 默认节点ID为1
 
     // 创建配置
     let config = Box::leak(Box::new(remdb::config::DbConfig {
@@ -678,24 +836,46 @@ async fn main() {
             &*(&raw const DEFAULT_ALLOCATOR as *const _)
                 as &'static dyn remdb::config::MemoryAllocator
         },
-        log_mode: remdb::config::LogMode::Async, // 默认异步日志模式
-        checkpoint_interval_ms: 30000,           // 默认30秒
-        log_file_size_limit: 16 * 1024 * 1024,   // 默认16MB
-        log_prealloc_size: 4 * 1024 * 1024,      // 默认4MB
-        log_segment_size: 16 * 1024 * 1024,      // 默认16MB
-        retained_checkpoints: 3,                 // 默认保留3个检查点
-        ha_role,                                 // HA角色
-        replication_mode,                        // 复制模式
-        heartbeat_interval_ms: ha_heartbeat_interval.unwrap_or(1000), // 默认1秒心跳
-        failure_detection_ms: ha_failure_detection_ms.unwrap_or(5000), // 默认5秒故障检测
-        sync_timeout_ms: ha_sync_timeout_ms.unwrap_or(2000),          // 默认2秒同步超时
-        master_address: master_address,          // 主节点地址
-        master_port: ha_master_port,             // 主节点端口
-        time_series_defaults: remdb::TimeSeriesConfig::DEFAULT // 时序数据默认配置
+        wal_config: remdb::config::WALConfig {
+            log_path: Box::leak(log_path.unwrap_or("./wal".to_string()).into_boxed_str()) as &'static str,
+            log_mode: match wal_log_mode.as_deref() {
+                Some("sync") | Some("Sync") => remdb::config::LogMode::Sync,
+                _ => remdb::config::LogMode::Async,
+            },
+            checkpoint_interval_ms: wal_checkpoint_interval_ms.unwrap_or(30000),
+            log_file_size_limit: wal_log_file_size_limit.unwrap_or(16 * 1024 * 1024),
+            log_prealloc_size: wal_log_prealloc_size.unwrap_or(4 * 1024 * 1024),
+            log_segment_size: wal_log_segment_size.unwrap_or(16 * 1024 * 1024),
+            retained_checkpoints: wal_retained_checkpoints.unwrap_or(3),
+        },
+        time_series_defaults: remdb::TimeSeriesConfig::DEFAULT, // 时序数据默认配置
+        pubsub_config: None, // PubSub配置，默认不使用
+        ha_config: Some(remdb::ha::HAConfig {
+            node_id,
+            ha_role,
+            replication_mode,
+            heartbeat_interval_ms: ha_heartbeat_interval.unwrap_or(1000), // 默认1秒心跳
+            failure_detection_ms: ha_failure_detection_ms.unwrap_or(5000), // 默认5秒故障检测
+            sync_timeout_ms: ha_sync_timeout_ms.unwrap_or(2000),          // 默认2秒同步超时
+            master_address,
+            master_port: ha_master_port,
+            replication_port: ha_replication_port.unwrap_or(6668), // 默认复制端口
+ // 默认心跳端口
+        })
     }));
 
     // 初始化全局内存分配器，这是关键的一步！
     let total_memory = config.total_memory;
+    
+    // 初始化HA manager（在内存分配器和数据库初始化之前，因为HA可能依赖于特定的初始化顺序）
+    if ha_enabled {
+        log_println!("Initializing HA manager...");
+        match remdb::ha::init(config) {
+            Ok(_) => log_println!("✓ HA manager initialized successfully"),
+            Err(e) => log_eprintln!("Error: Failed to initialize HA manager: {}", e),
+        }
+    }
+    
     // 使用Vec<u8>在堆上分配内存，避免栈溢出
     let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
     let memory_ptr = memory_vec.as_ptr() as *mut u8;
@@ -705,7 +885,7 @@ async fn main() {
     if let Err(err) =
         unsafe { remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory) }
     {
-        eprintln!(
+        log_eprintln!(
             "Error: Failed to initialize global memory allocator: {:?}",
             err
         );
@@ -716,45 +896,45 @@ async fn main() {
     let mut db = match unsafe { remdb::init_global_db(config) } {
         Ok(db) => db,
         Err(err) => {
-            eprintln!("Error: Failed to initialize global database: {:?}", err);
+            log_eprintln!("Error: Failed to initialize global database: {:?}", err);
             return;
         }
     };
 
-    println!("Database initialized with {} tables", config.tables.len());
+    log_println!("Database initialized with {} tables", config.tables.len());
 
     // 加载快照
     if let Some(snapshot_dir) = &snapshot_dir {
-        println!("Loading snapshot from directory: {}", snapshot_dir);
+        log_println!("Loading snapshot from directory: {}", snapshot_dir);
         if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
-            eprintln!("Warning: Failed to load snapshot: {:?}", err);
+            log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
         } else {
-            println!("Snapshot loaded successfully");
+            log_println!("Snapshot loaded successfully");
         }
     }
 
     // 加载全量镜像文件
     if let Some(full_image_path) = &full_image {
-        println!("Loading full image file: {}", full_image_path);
+        log_println!("Loading full image file: {}", full_image_path);
         if let Err(err) = db.restore_snapshot(full_image_path) {
-            eprintln!("Error: Failed to load full image: {:?}", err);
+            log_eprintln!("Error: Failed to load full image: {:?}", err);
         } else {
-            println!("Full image loaded successfully");
+            log_println!("Full image loaded successfully");
         }
     }
 
     // 执行DDL文件中的INSERT语句
     if !insert_statements.is_empty() {
-        println!("Executing {} INSERT statements from DDL file", insert_statements.len());
+        log_println!("Executing {} INSERT statements from DDL file", insert_statements.len());
         for stmt in insert_statements {
-            println!("Executing: {}", stmt);
+            log_println!("Executing: {}", stmt);
             match sql_engine::execute_extended_sql(&mut db, &stmt) {
                 Ok(result) => {
-                    println!("✓ INSERT executed successfully, affected rows: {}", result.affected_rows);
+                    log_println!("✓ INSERT executed successfully, affected rows: {}", result.affected_rows);
                 },
                 Err(err) => {
-                    eprintln!("Error: Failed to execute INSERT statement: {}", err);
-                    eprintln!("Statement: {}", stmt);
+                    log_eprintln!("Error: Failed to execute INSERT statement: {}", err);
+                    log_eprintln!("Statement: {}", stmt);
                 }
             }
         }
@@ -762,40 +942,48 @@ async fn main() {
     
     // 测试healthcheck命令
     if args.test_export {
-        println!("\n=== Testing HEALTHCHECK command ===");
+        log_println!("\n=== Testing HEALTHCHECK command ===");
         match sql_engine::execute_extended_sql(&mut db, "healthcheck") {
             Ok(result) => {
-                println!("\nHealthcheck result:");
-                println!("+--------------------+----------+------------------------------------------------------------------+");
+                log_println!("\nHealthcheck result:");
+                log_println!("+--------------------+----------+------------------------------------------------------------------+");
                 for (i, row) in result.rows.iter().enumerate() {
                     if i == 0 {
                         // 打印列名
+                        let mut line = String::from("|");
                         for col in &result.columns {
-                            print!("| {:<18} ", col);
+                            line.push_str(&format!(" {:<18} ", col));
+                            line.push('|');
                         }
-                        println!("|");
-                        println!("+--------------------+----------+------------------------------------------------------------------+");
+                        log_println!("{}", line);
+                        log_println!("+--------------------+----------+------------------------------------------------------------------+");
                     }
+                    let mut line = String::from("|");
                     for (j, value) in row.iter().enumerate() {
                         let width = match j {
                             0 => 18,
                             1 => 8,
                             _ => 50,
                         };
-                        print!("| {:width$} ", value, width = width);
+                        line.push_str(&format!(" {:width$} ", value, width = width));
+                        line.push('|');
                     }
-                    println!("|");
+                    log_println!("{}", line);
                 }
-                println!("+--------------------+----------+------------------------------------------------------------------+");
+                log_println!("+--------------------+----------+------------------------------------------------------------------+");
             },
             Err(err) => {
-                eprintln!("Error: Failed to execute healthcheck: {}", err);
+                log_eprintln!("Error: Failed to execute healthcheck: {}", err);
             }
         }
     }
 
+    // 将数据库实例泄漏到静态内存，以获取'static生命周期
+    let db_static = Box::leak(Box::new(db));
+    let db_mut_ref: &'static mut RemDb = db_static;
+    
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
-    let db_arc = Arc::new(Mutex::new(db));
+    let db_arc = Arc::new(TokioMutex::new(db_mut_ref));
 
     // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
     let actual_jdbc_port = jdbc_port.unwrap_or(6666);
@@ -823,11 +1011,11 @@ async fn main() {
             password_hash,
         );
 
-        println!(
+        log_println!(
             "Starting JDBC server on port {} with max connections {} and timeout {} seconds",
             actual_jdbc_port, max_conns, jdbc_timeout
         );
-        println!(
+        log_println!(
             "JDBC authentication: {}",
             if auth_enabled { "enabled" } else { "disabled" }
         );
@@ -835,11 +1023,11 @@ async fn main() {
         // 在后台启动JDBC服务器
         tokio::spawn(async move {
             if let Err(e) = jdbc_server.start().await {
-                eprintln!("Error: JDBC server failed to start: {:?}", e);
+                log_eprintln!("Error: JDBC server failed to start: {:?}", e);
             }
         });
     } else {
-        println!("JDBC server is disabled");
+        log_println!("JDBC server is disabled");
     }
 
     // 初始化并启动PubSub系统（如果启用）
@@ -877,15 +1065,15 @@ async fn main() {
 
         // 初始化PubSub系统
         if let Err(err) = pubsub_init(pubsub_config) {
-            eprintln!("Warning: Failed to initialize PubSub system: {:?}", err);
+            log_eprintln!("Warning: Failed to initialize PubSub system: {:?}", err);
         } else {
-            println!(
+            log_println!(
                 "PubSub system initialized successfully on port {}",
                 pubsub_port
             );
         }
     } else {
-        println!("PubSub server is disabled");
+        log_println!("PubSub server is disabled");
     }
 
     // 启动交互式控制台（如果启用且不是非交互式模式）
@@ -895,33 +1083,42 @@ async fn main() {
             let mut db_lock = db_arc.lock().await;
             cli::run_cli(&mut db_lock);
         } else {
-            println!(
+            log_println!(
                 "\n--- JDBC server is running on port {} ---",
                 actual_jdbc_port
             );
-            println!("Interactive CLI is disabled when JDBC server is running.");
-            println!("Use --non-interactive=false to enable CLI in non-JDBC mode.");
-            println!("Press Ctrl+C to stop the server");
+            log_println!("Interactive CLI is disabled when JDBC server is running.");
+            log_println!("Use --non-interactive=false to enable CLI in non-JDBC mode.");
+            log_println!("Press Ctrl+C to stop the server");
             tokio::signal::ctrl_c().await.unwrap();
-            println!("\nStopping JDBC server...");
+            log_println!("\nStopping JDBC server...");
         }
     } else {
         // 非交互式模式下，如果启用了JDBC服务，等待Ctrl+C
         if should_start_jdbc {
-            println!(
+            log_println!(
                 "\n--- JDBC server is running on port {} ---",
                 actual_jdbc_port
             );
-            println!("Press Ctrl+C to stop the server");
+            log_println!("Press Ctrl+C to stop the server");
             tokio::signal::ctrl_c().await.unwrap();
-            println!("\nStopping JDBC server...");
+            log_println!("\nStopping JDBC server...");
+        }
+    }
+
+    // 程序退出前关闭HA manager
+    if ha_enabled {
+        log_println!("Stopping HA manager...");
+        use remdb::ha::shutdown as ha_shutdown;
+        if let Err(err) = ha_shutdown() {
+            log_eprintln!("Warning: Failed to shutdown HA manager: {:?}", err);
         }
     }
 
     // 程序退出前关闭PubSub系统
-    println!("Stopping PubSub server...");
+    log_println!("Stopping PubSub server...");
     use remdb::pubsub::shutdown as pubsub_shutdown;
     if let Err(err) = pubsub_shutdown() {
-        eprintln!("Warning: Failed to shutdown PubSub server: {:?}", err);
+        log_eprintln!("Warning: Failed to shutdown PubSub server: {:?}", err);
     }
 }

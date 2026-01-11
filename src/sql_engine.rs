@@ -2024,38 +2024,40 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
 
     // 添加HA服务状态检查
     if let Some(_ha_manager) = remdb::ha::get_ha_manager() {
-        // 获取HA配置信息（从db.config中获取）
-        let role = match db.config.ha_role {
-            remdb::config::HARole::Master => "Master",
-            remdb::config::HARole::Slave => "Slave",
-            remdb::config::HARole::Auto => "Auto",
-        };
-        let replication_mode = match db.config.replication_mode {
-            remdb::config::ReplicationMode::Sync => "Sync",
-            remdb::config::ReplicationMode::Async => "Async",
-        };
-        
-        rows.push(vec![
-            "HA Service".to_string(),
-            "HEALTHY".to_string(),
-            format!("Enabled, Role: {}, Mode: {}", role, replication_mode).to_string(),
-        ]);
-        
-        // 添加HA配置详情
-        rows.push(vec![
-            "HA Config".to_string(),
-            "HEALTHY".to_string(),
-            format!("Heartbeat: {}ms, Failure Detection: {}ms, Sync Timeout: {}ms", 
-                   db.config.heartbeat_interval_ms, db.config.failure_detection_ms, db.config.sync_timeout_ms).to_string(),
-        ]);
-        
-        // 添加主节点信息（如果是从节点）
-        if let Some(master_addr) = db.config.master_address {
+        // 获取HA配置信息（从db.config.ha_config中获取）
+        if let Some(ha_config) = &db.config.ha_config {
+            let role = match ha_config.ha_role {
+                remdb::ha::HARole::Master => "Master",
+                remdb::ha::HARole::Slave => "Slave",
+                remdb::ha::HARole::Auto => "Auto",
+            };
+            let replication_mode = match ha_config.replication_mode {
+                remdb::ha::ReplicationMode::Sync => "Sync",
+                remdb::ha::ReplicationMode::Async => "Async",
+            };
+            
             rows.push(vec![
-                "HA Master".to_string(),
+                "HA Service".to_string(),
                 "HEALTHY".to_string(),
-                format!("Address: {}, Port: {:?}", master_addr, db.config.master_port).to_string(),
+                format!("Enabled, Role: {}, Mode: {}", role, replication_mode).to_string(),
             ]);
+            
+            // 添加HA配置详情
+            rows.push(vec![
+                "HA Config".to_string(),
+                "HEALTHY".to_string(),
+                format!("Heartbeat: {}ms, Failure Detection: {}ms, Sync Timeout: {}ms", 
+                       ha_config.heartbeat_interval_ms, ha_config.failure_detection_ms, ha_config.sync_timeout_ms).to_string(),
+            ]);
+            
+            // 添加主节点信息（如果是从节点）
+            if let Some(master_addr) = ha_config.master_address {
+                rows.push(vec![
+                    "HA Master".to_string(),
+                    "HEALTHY".to_string(),
+                    format!("Address: {}, Port: {:?}", master_addr, ha_config.master_port).to_string(),
+                ]);
+            }
         }
     } else {
         rows.push(vec![

@@ -3,7 +3,9 @@
 snapshots/*
 /jdbc-driver/target/*
 *.log
-/vendor/*
+logs/*
+/vendor
 remdb_history.txt
 remdb/*
 *.wal
+/wal
