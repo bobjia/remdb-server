@@ -55,6 +55,37 @@ pub fn run_cli(db: &mut RemDb) {
                     continue;
                 }
 
+                // 处理source命令，用于执行文件中的SQL/DDL语句
+                if line.starts_with("source ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() != 2 {
+                        eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
+                        continue;
+                    }
+
+                    let file_path = parts[1];
+                    match std::fs::read_to_string(file_path) {
+                        Ok(content) => {
+                            println!("Executing commands from file: {}", file_path);
+                            // 执行文件内容
+                            match execute_extended_sql(db, &content) {
+                                Ok(result_set) => {
+                                    let formatted = format_result_set(&result_set);
+                                    println!("{}", formatted);
+                                    println!("✓ Successfully executed commands from file: {}", file_path);
+                                }
+                                Err(err) => {
+                                    eprintln!("Error: Failed to execute commands from file {}: {:?}", file_path, err);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
+                        }
+                    }
+                    continue;
+                }
+
                 // 处理snapshot命令
                 if line.starts_with("snapshot ") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
@@ -126,6 +157,7 @@ pub fn print_help() {
     println!("Available commands:");
     println!("  exit, :q                        - Exit the console");
     println!("  help                            - Show this help message");
+    println!("  source <file_path>              - Execute SQL/DDL commands from file");
     println!("  tables                          - List all tables");
     println!("  describe <table>                - Show table schema");
     println!("  desc <table>                    - Shortcut for describe");

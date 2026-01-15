@@ -54,7 +54,7 @@ jdbc_auth_enabled = true
 # JDBC认证用户名
 jdbc_username = "root"
 # JDBC认证密码（SHA-256哈希值）
-jdbc_password_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
+jdbc_password_hash = "4813494d137e1631bba301d5acab6e7bb7aa74ce1185d456565ef51d737677b2"
 
 # 通过配置文件启用PubSub功能
 [pubsub]

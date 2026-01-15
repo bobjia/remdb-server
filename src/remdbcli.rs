@@ -84,7 +84,8 @@ fn main() {
         let mut line = String::new();
         stdin.read_line(&mut line).unwrap();
 
-        let command = line.trim().to_lowercase();
+        let original_line = line.trim();
+        let command = original_line.to_lowercase();
         if command.is_empty() {
             continue;
         }
@@ -98,7 +99,62 @@ fn main() {
             continue;
         }
 
-        execute_sql(&mut stream, &line.trim());
+        // 处理source命令，用于执行文件中的SQL/DDL语句
+        if command.starts_with("source ") {
+            let parts: Vec<&str> = original_line.split_whitespace().collect();
+            if parts.len() != 2 {
+                eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
+                continue;
+            }
+
+            let file_path = parts[1];
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => {
+                    println!("Executing commands from file: {}", file_path);
+                    
+                    // 按行处理文件内容
+                    let mut current_statement = String::new();
+                    for line in content.lines() {
+                        let trimmed_line = line.trim();
+                        
+                        // 跳过空行和注释行
+                        if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
+                            continue;
+                        }
+                        
+                        // 添加当前行到语句
+                        current_statement.push_str(trimmed_line);
+                        current_statement.push(' ');
+                        
+                        // 如果语句以分号结束，执行它
+                        if trimmed_line.ends_with(';') {
+                            // 移除分号和多余空格
+                            let statement = current_statement.trim_end_matches(';').trim();
+                            if !statement.is_empty() {
+                                // 执行单个语句
+                                execute_sql(&mut stream, statement);
+                            }
+                            // 重置当前语句
+                            current_statement.clear();
+                        }
+                    }
+                    
+                    // 执行最后一个没有分号的语句
+                    let statement = current_statement.trim();
+                    if !statement.is_empty() {
+                        execute_sql(&mut stream, statement);
+                    }
+                    
+                    println!("✓ Successfully executed commands from file: {}", file_path);
+                }
+                Err(err) => {
+                    eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
+                }
+            }
+            continue;
+        }
+
+        execute_sql(&mut stream, original_line);
     }
 
     // 关闭连接
@@ -117,7 +173,7 @@ fn execute_sql(stream: &mut TcpStream, sql: &str) {
     }
     stream.flush().unwrap();
 
-    // 读取响应
+    // 读取JDBC服务器响应
     let mut response = String::new();
     let mut reader = BufReader::new(stream);
     if let Err(e) = reader.read_line(&mut response) {
@@ -136,7 +192,12 @@ fn process_response(response: &str) {
     }
 
     if trimmed.starts_with("ERROR|") {
-        eprintln!("Error: {}", &trimmed[6..]);
+        // 处理错误响应，确保不会越界
+        if trimmed.len() > 6 {
+            eprintln!("Error: {}", &trimmed[6..]);
+        } else {
+            eprintln!("Error: Invalid error response format");
+        }
         return;
     }
 
@@ -149,41 +210,41 @@ fn process_response(response: &str) {
 
         let affected_rows = parts[0].parse::<usize>().unwrap_or(0);
 
-        if parts.len() == 1 || parts[1] == "0" {
+        // 检查parts.len()是否足够，避免数组越界
+        if parts.len() >= 2 && parts[1] != "0" {
+            // 有结果集
+            if parts.len() >= 4 {
+                let columns_count = parts[1].parse::<usize>().unwrap_or(0);
+                let columns = parts[2].split(',').collect::<Vec<&str>>();
+                let rows_str = parts[3];
+
+                // 检查列数是否匹配
+                if columns.len() != columns_count {
+                    eprintln!(
+                        "Column count mismatch: expected {}, got {}",
+                        columns_count,
+                        columns.len()
+                    );
+                    return;
+                }
+
+                let rows = if rows_str.is_empty() {
+                    Vec::new()
+                } else {
+                    rows_str
+                        .split(';')
+                        .map(|row| row.split(',').collect::<Vec<&str>>())
+                        .collect::<Vec<Vec<&str>>>()
+                };
+
+                // 格式化输出结果集
+                format_result_set(columns, rows);
+            }
+        } else {
             // 没有结果集，只显示受影响的行数
             println!("Affected {} row(s)", affected_rows);
-            return;
         }
-
-        // 有结果集
-        if parts.len() >= 4 {
-            let columns_count = parts[1].parse::<usize>().unwrap_or(0);
-            let columns = parts[2].split(',').collect::<Vec<&str>>();
-            let rows_str = parts[3];
-
-            // 检查列数是否匹配
-            if columns.len() != columns_count {
-                eprintln!(
-                    "Column count mismatch: expected {}, got {}",
-                    columns_count,
-                    columns.len()
-                );
-                return;
-            }
-
-            let rows = if rows_str.is_empty() {
-                Vec::new()
-            } else {
-                rows_str
-                    .split(';')
-                    .map(|row| row.split(',').collect::<Vec<&str>>())
-                    .collect::<Vec<Vec<&str>>>()
-            };
-
-            // 格式化输出结果集
-            format_result_set(columns, rows);
-            return;
-        }
+        return;
     }
 
     eprintln!("Unknown response format: {}", trimmed);
@@ -251,6 +312,7 @@ fn print_help() {
     println!("Available commands:");
     println!("  exit, quit                     - Exit the console");
     println!("  help                           - Show this help message");
+    println!("  source <file_path>             - Execute SQL/DDL commands from file");
     println!("  tables                         - List all tables");
     println!("  describe <table>               - Show table schema");
     println!("  desc <table>                   - Shortcut for describe");

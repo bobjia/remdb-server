@@ -259,7 +259,8 @@ impl JdbcServer {
                     }
                 },
                 Err(join_err) => {
-                    let error_result = format!("ERROR|Task join error: {:?}", join_err);
+                    // 处理任务panic情况，返回更友好的错误信息
+                    let error_result = format!("ERROR|SQL execution failed: {:?}", join_err);
                     println!("SQL task error: {}", error_result);
                     error_result
                 }
@@ -267,7 +268,8 @@ impl JdbcServer {
             Err(timeout_err) => {
                 let error_result = format!(
                     "ERROR|SQL execution timeout after {} seconds: {:?}",
-                    timeout, timeout_err
+                    timeout,
+                    timeout_err
                 );
                 println!("SQL timeout error: {}", error_result);
                 error_result

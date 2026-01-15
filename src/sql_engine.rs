@@ -42,8 +42,93 @@ pub struct ResultSet {
     pub affected_rows: usize,
 }
 
-/// 执行扩展的SQL命令
+/// 执行扩展的SQL命令，支持多行、注释和分号分隔
 pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 处理多行SQL语句，支持分号分隔和注释
+    let mut current_statement = String::new();
+    let mut result_set = ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: 0,
+    };
+    
+    // 标记是否有实际的SQL语句需要执行
+    let mut has_statement = false;
+    
+    for line in sql.lines() {
+        let trimmed_line = line.trim();
+        
+        // 跳过空行和注释行
+        if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
+            continue;
+        }
+        
+        has_statement = true;
+        
+        // 添加当前行到语句
+        current_statement.push_str(trimmed_line);
+        current_statement.push(' ');
+        
+        // 如果语句以分号结束，执行它
+        if trimmed_line.ends_with(';') {
+            // 移除分号和多余空格
+            let statement = current_statement.trim_end_matches(';').trim();
+            if !statement.is_empty() {
+                // 执行单个语句
+                let result = execute_original_sql(db, statement);
+                match result {
+                    Ok(result) => {
+                        // 累积结果
+                        result_set.affected_rows += result.affected_rows;
+                        // 如果是第一个结果，保存列信息
+                        if result_set.columns.is_empty() {
+                            result_set.columns = result.columns;
+                        }
+                        // 添加行数据
+                        result_set.rows.extend(result.rows);
+                    },
+                    Err(err) => {
+                        return Err(err);
+                    }
+                }
+            }
+            // 重置当前语句
+            current_statement.clear();
+        }
+    }
+    
+    // 执行最后一个没有分号的语句
+    let statement = current_statement.trim();
+    if !statement.is_empty() {
+        has_statement = true;
+        let result = execute_original_sql(db, statement);
+        match result {
+            Ok(result) => {
+                // 累积结果
+                result_set.affected_rows += result.affected_rows;
+                // 如果是第一个结果，保存列信息
+                if result_set.columns.is_empty() {
+                    result_set.columns = result.columns;
+                }
+                // 添加行数据
+                result_set.rows.extend(result.rows);
+            },
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+    
+    // 如果没有实际的SQL语句需要执行，直接返回空结果集
+    if !has_statement {
+        return Ok(result_set);
+    }
+    
+    Ok(result_set)
+}
+
+/// 原有的SQL执行逻辑
+fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
     let sql_lower = sql.trim().to_lowercase();
 
     // 处理TABLES命令

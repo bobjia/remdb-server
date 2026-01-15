@@ -5,7 +5,7 @@ mod snapshot_loader;
 mod sql_engine;
 
 use remdb::{ha::{HARole, ReplicationMode}, RemDb};
-use crate::ddl_compiler::compile_ddl_file;
+
 use crate::jdbc_server::JdbcServer;
 use clap::Parser;
 use core::ptr;
@@ -388,8 +388,7 @@ struct HaConfig {
 /// 配置文件结构体
 #[derive(Deserialize, Debug, Default)]
 struct Config {
-    /// DDL文件路径
-    ddl: Option<String>,
+    
 
     /// 快照存储目录
     snapshot_dir: Option<String>,
@@ -474,9 +473,7 @@ struct Args {
     #[arg(long, short)]
     config: Option<String>,
 
-    /// DDL文件路径
-    #[arg(long)]
-    ddl: Option<String>,
+    
 
     /// 快照存储目录
     #[arg(long)]
@@ -655,10 +652,7 @@ async fn main() {
     }
 
     // 合并配置：命令行参数优先级高于配置文件
-    let ddl_path = match args.ddl.or(config.ddl) {
-        Some(path) if !path.is_empty() => Some(path),
-        _ => None,
-    };
+    
     let snapshot_dir = args.snapshot_dir.or(config.snapshot_dir);
     let full_image = args.full_image.clone();
     let total_memory = args.total_memory.or(config.total_memory);
@@ -765,27 +759,8 @@ async fn main() {
     remdb::platform::init_platform(&WINDOWS_PLATFORM);
     log_println!("Platform initialized manually");
 
-    // 解析DDL文件（如果提供）
-    let (tables, insert_statements) = if let Some(ddl_path) = ddl_path {
-        log_println!("Compiling DDL file: {}", ddl_path);
-        match compile_ddl_file(&ddl_path) {
-            Ok((tables, insert_statements)) => {
-                log_println!("✓ Successfully compiled DDL file");
-                debug_println!("Debug: Compiled {} tables:", tables.len());
-                for table in &tables {
-                    debug_println!("Debug: - Table: {}", table.name);
-                }
-                debug_println!("Debug: Found {} INSERT statements", insert_statements.len());
-                (tables, insert_statements)
-            }
-            Err(err) => {
-                log_eprintln!("Error: Failed to compile DDL file: {:?}", err);
-                return;
-            }
-        }
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    // DDL文件现在通过remdbcli的source指令执行，不再在启动时处理
+    let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = (Vec::new(), Vec::new());
 
     // 创建默认内存分配器
     static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator =
