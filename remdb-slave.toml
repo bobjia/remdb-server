@@ -70,7 +70,7 @@ max_retransmissions = 5
 enabled = true
 
 # 节点ID
-node_id = 2
+node_id = "2"
 
 # 节点角色（master/slave）
 role = "slave"

@@ -241,36 +241,34 @@ fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
     
     // 遍历所有普通表
     let mut table_id = 0;
-    loop {
+    while table_id < 100 { // 合理的最大表数
         match db.get_table(table_id) {
             Ok(table) => {
                 // 添加表名到结果集
                 rows.push(vec![table.def.name.to_string()]);
                 affected_rows += 1;
-                table_id += 1;
             },
             Err(_) => {
-                // 没有更多的普通表了，退出循环
-                break;
+                // 表不存在，继续检查下一个ID
             }
         }
+        table_id += 1;
     }
     
     // 遍历所有时序表
     let mut ts_table_id = 0;
-    loop {
+    while ts_table_id < 100 { // 合理的最大时序表数
         match db.get_time_series_table(ts_table_id) {
             Ok(ts_table) => {
                 // 添加时序表名到结果集
                 rows.push(vec![ts_table.def.base.name.to_string()]);
                 affected_rows += 1;
-                ts_table_id += 1;
             },
             Err(_) => {
-                // 没有更多的时序表了，退出循环
-                break;
+                // 时序表不存在，继续检查下一个ID
             }
         }
+        ts_table_id += 1;
     }
 
     // 构造结果集

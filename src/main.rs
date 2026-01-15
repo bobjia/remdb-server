@@ -876,23 +876,42 @@ async fn main() {
 
     log_println!("Database initialized with {} tables", config.tables.len());
 
-    // 加载快照
-    if let Some(snapshot_dir) = &snapshot_dir {
-        log_println!("Loading snapshot from directory: {}", snapshot_dir);
-        if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
-            log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
-        } else {
-            log_println!("Snapshot loaded successfully");
-        }
-    }
-
-    // 加载全量镜像文件
+    // 加载全量镜像文件（优先级最高）
     if let Some(full_image_path) = &full_image {
         log_println!("Loading full image file: {}", full_image_path);
         if let Err(err) = db.restore_snapshot(full_image_path) {
             log_eprintln!("Error: Failed to load full image: {:?}", err);
         } else {
             log_println!("Full image loaded successfully");
+        }
+    } else {
+        // 从WAL目录恢复数据（如果配置了WAL）
+        let wal_dir = &config.wal_config.log_path;
+        log_println!("Checking WAL directory: {}", wal_dir);
+        if std::path::Path::new(wal_dir).exists() {
+            log_println!("Loading and recovering from WAL directory: {}", wal_dir);
+            if let Err(err) = snapshot_loader::load_from_wal_dir(&mut db, wal_dir) {
+                log_eprintln!("Warning: Failed to recover from WAL: {:?}", err);
+                // 如果WAL恢复失败，尝试从快照目录加载
+                if let Some(snapshot_dir) = &snapshot_dir {
+                    log_println!("Falling back to snapshot directory: {}", snapshot_dir);
+                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
+                        log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
+                    } else {
+                        log_println!("Snapshot loaded successfully");
+                    }
+                }
+            } else {
+                log_println!("Data recovered successfully from WAL");
+            }
+        } else if let Some(snapshot_dir) = &snapshot_dir {
+            // 如果没有WAL目录，尝试从快照目录加载
+            log_println!("Loading snapshot from directory: {}", snapshot_dir);
+            if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
+                log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
+            } else {
+                log_println!("Snapshot loaded successfully");
+            }
         }
     }
 

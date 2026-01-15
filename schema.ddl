@@ -41,27 +41,6 @@ CREATE INDEX idx_orders_user_id ON orders (user_id);
 CREATE INDEX idx_orders_product_id ON orders (product_id);
 
 
-CREATE TABLE test_types (
-    id INTEGER PRIMARY KEY,
-    timestamp_col TIMESTAMP,
-    timestamptz_col TIMESTAMPTZ,
-    timestamp_with_tz TIMESTAMP WITH TIME ZONE,
-    smallint_col SMALLINT,
-    tinyint_col TINYINT,
-    mediumint_col MEDIUMINT,
-    bigint_col BIGINT,
-    decimal_col DECIMAL(10,2),
-    numeric_col NUMERIC(8,3),
-    real_col REAL,
-    double_col DOUBLE PRECISION,
-    text_col TEXT,
-    varchar_col VARCHAR(255),
-    boolean_col BOOLEAN,
-    date_col DATE,
-    datetime_col DATETIME,
-    interval_col INTERVAL
-);
-
 insert into users (name, email, age, created_at) values ("bob1", "a", 1,111111);
 insert into users (name, email, age, created_at) values ("bob2", "a", 2,111112);
 insert into users (name, email, age, created_at) values ("bob3", "a", 3,111113);
