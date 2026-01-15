@@ -1,5 +1,4 @@
 use crate::ddl_compiler::DdlError;
-use crate::debug_println;
 use remdb::{DdlExecutor, RemDb, RemDbError};
 use thiserror::Error;
 
@@ -327,7 +326,11 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     db.metrics.inc_read_ops();
 
     // 调试：打印要执行的SQL语句
-    debug_println!("Debug: Executing SELECT SQL: {}", sql);
+    if crate::is_debug_mode() {
+        let message = format!("Debug: Executing SELECT SQL: {}", sql);
+        println!("{}", message);
+        crate::write_log_to_file(&message);
+    }
 
     // 调试：手动查找表名
     let sql_lower = sql.to_lowercase();
@@ -390,7 +393,8 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                     value.value.i64, 
                     value.value.float32, 
                     value.value.float64, 
-                    core::str::from_utf8(&value.value.string).unwrap_or(""));
+                    core::str::from_utf8(&value.value.string).unwrap_or("")
+                );
                 
                 // 对于聚合函数结果，我们需要特殊处理
                 // 检查当前SQL是否包含聚合函数

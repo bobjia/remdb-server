@@ -8,4 +8,5 @@ logs/*
 remdb_history.txt
 remdb/*
 *.wal
-/wal
+db/*
+slave-db/*

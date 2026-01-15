@@ -1,12 +1,5 @@
-mod cli;
-mod ddl_compiler;
-mod jdbc_server;
-mod snapshot_loader;
-mod sql_engine;
-
 use remdb::{ha::{HARole, ReplicationMode}, RemDb};
 
-use crate::jdbc_server::JdbcServer;
 use clap::Parser;
 use core::ptr;
 use serde::Deserialize;
@@ -16,22 +9,18 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tokio::sync::Mutex as TokioMutex;
+use remdb_server::{set_debug_mode, set_global_log_handle, is_debug_mode};
+use remdb_server::jdbc_server::JdbcServer;
 
-// 全局debug模式开关
-static DEBUG_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[macro_use]
+mod macros;
+mod cli;
+mod ddl_compiler;
+mod snapshot_loader;
+mod sql_engine;
 
 // 全局日志文件句柄
 static mut LOG_FILE_HANDLE: Option<Arc<Mutex<std::fs::File>>> = None;
-
-/// 设置debug模式
-pub fn set_debug_mode(enabled: bool) {
-    DEBUG_MODE.store(enabled, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// 检查是否开启了debug模式
-pub fn is_debug_mode() -> bool {
-    DEBUG_MODE.load(std::sync::atomic::Ordering::Relaxed)
-}
 
 /// 设置日志文件
 pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
@@ -55,7 +44,8 @@ pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
     
     // 保存到全局变量
     unsafe {
-        LOG_FILE_HANDLE = Some(file_handle);
+        LOG_FILE_HANDLE = Some(file_handle.clone());
+        set_global_log_handle(file_handle);
     }
     
     Ok(())
@@ -72,29 +62,7 @@ pub fn write_log_to_file(message: &str) {
     }
 }
 
-/// 调试日志宏，只有在debug模式下才输出
-#[macro_export]
-macro_rules! debug_println {
-    ($($args:tt)*) => {
-        if $crate::is_debug_mode() {
-            let message = format!($($args)*);
-            println!("{}", message);
-            $crate::write_log_to_file(&message);
-        }
-    };
-}
 
-/// 调试错误日志宏，只有在debug模式下才输出
-#[macro_export]
-macro_rules! debug_eprintln {
-    ($($args:tt)*) => {
-        if $crate::is_debug_mode() {
-            let message = format!($($args)*);
-            eprintln!("{}", message);
-            $crate::write_log_to_file(&message);
-        }
-    };
-}
 
 /// 重定义标准println宏，使其同时输出到控制台和日志文件
 macro_rules! log_println {
@@ -102,7 +70,7 @@ macro_rules! log_println {
         {
             let message = format!($($args)*);
             println!("{}", message);
-            $crate::write_log_to_file(&message);
+            write_log_to_file(&message);
         }
     };
 }
@@ -113,7 +81,7 @@ macro_rules! log_eprintln {
         {
             let message = format!($($args)*);
             eprintln!("{}", message);
-            $crate::write_log_to_file(&message);
+            write_log_to_file(&message);
         }
     };
 }
@@ -618,12 +586,41 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    // 在程序最开始就设置默认的 RUST_LOG 环境变量
+    unsafe {
+        std::env::set_var("RUST_LOG", "error");
+    }
+    
     let args = Args::parse();
 
     let message = "remdb-server v0.1.0";
     println!("{}", message);
 
-    // 读取配置文件
+    // 提前解析配置文件，获取完整的 debug 模式设置
+    let mut config = Config::default();
+    if let Some(config_path) = &args.config {
+        match fs::read_to_string(config_path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(parsed_config) => {
+                    config = parsed_config;
+                },
+                Err(_) => {},
+            },
+            Err(_) => {},
+        }
+    }
+    
+    // 计算最终的 debug 模式
+    let debug_mode = args.debug || config.debug.unwrap_or(false);
+    
+    // 如果是 debug 模式，更新 RUST_LOG 环境变量
+    if debug_mode {
+        unsafe {
+            std::env::set_var("RUST_LOG", "debug");
+        }
+    }
+    
+    // 重新初始化配置，因为上面的代码只是为了获取 debug 模式
     let mut config = Config::default();
     if let Some(config_path) = &args.config {
         let message = format!("Reading config file: {}", config_path);
@@ -739,6 +736,7 @@ async fn main() {
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
     set_debug_mode(debug_mode);
+    
     if debug_mode {
         let message = "Debug mode enabled";
         println!("{}", message);

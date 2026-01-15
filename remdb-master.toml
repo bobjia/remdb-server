@@ -4,7 +4,7 @@
 ddl = "schema.ddl"
 
 # 快照文件路径
-snapshot_dir = "./snapshot"
+snapshot_dir = "./db/snapshot"
 
 # 数据库总内存大小（字节），默认100MB
 total_memory = 104857600
@@ -23,7 +23,7 @@ default_max_records = 10000
 # WAL配置
 [wal]
 # 日志文件路径
-log_path = "./wal"
+log_path = "./db/wal"
 # 日志模式，可选值：async, sync
 log_mode = "async"
 # 检查点间隔（毫秒），默认30000
