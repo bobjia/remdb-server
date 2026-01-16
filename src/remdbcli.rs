@@ -77,89 +77,112 @@ fn main() {
     println!("{}", "=".repeat(60));
 
     let stdin = io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    
     loop {
         print!("remdbcli> ");
         io::stdout().flush().unwrap();
 
         let mut line = String::new();
-        stdin.read_line(&mut line).unwrap();
+        let result = reader.read_line(&mut line);
+        
+        match result {
+            Ok(0) => {
+                // EOF encountered, exit gracefully
+                println!("\nEOF encountered, exiting...");
+                break;
+            },
+            Ok(_) => {
+                let original_line = line.trim();
+                let command = original_line.to_lowercase();
+                if command.is_empty() {
+                    continue;
+                }
 
-        let original_line = line.trim();
-        let command = original_line.to_lowercase();
-        if command.is_empty() {
-            continue;
-        }
+                if command == "exit" || command == "quit" {
+                    break;
+                }
 
-        if command == "exit" || command == "quit" {
-            break;
-        }
+                if command == "help" {
+                    print_help();
+                    continue;
+                }
 
-        if command == "help" {
-            print_help();
-            continue;
-        }
+                // 处理source命令，用于执行文件中的SQL/DDL语句
+                if command.starts_with("source ") {
+                    let parts: Vec<&str> = original_line.split_whitespace().collect();
+                    if parts.len() != 2 {
+                        eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
+                        continue;
+                    }
 
-        // 处理source命令，用于执行文件中的SQL/DDL语句
-        if command.starts_with("source ") {
-            let parts: Vec<&str> = original_line.split_whitespace().collect();
-            if parts.len() != 2 {
-                eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
-                continue;
-            }
-
-            let file_path = parts[1];
-            match std::fs::read_to_string(file_path) {
-                Ok(content) => {
-                    println!("Executing commands from file: {}", file_path);
-                    
-                    // 按行处理文件内容
-                    let mut current_statement = String::new();
-                    for line in content.lines() {
-                        let trimmed_line = line.trim();
-                        
-                        // 跳过空行和注释行
-                        if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
-                            continue;
-                        }
-                        
-                        // 添加当前行到语句
-                        current_statement.push_str(trimmed_line);
-                        current_statement.push(' ');
-                        
-                        // 如果语句以分号结束，执行它
-                        if trimmed_line.ends_with(';') {
-                            // 移除分号和多余空格
-                            let statement = current_statement.trim_end_matches(';').trim();
+                    let file_path = parts[1];
+                    match std::fs::read_to_string(file_path) {
+                        Ok(content) => {
+                            println!("Executing commands from file: {}", file_path);
+                            
+                            // 按行处理文件内容
+                            let mut current_statement = String::new();
+                            for line in content.lines() {
+                                let trimmed_line = line.trim();
+                                
+                                // 跳过空行和注释行
+                                if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
+                                    continue;
+                                }
+                                
+                                // 添加当前行到语句
+                                current_statement.push_str(trimmed_line);
+                                current_statement.push(' ');
+                                
+                                // 如果语句以分号结束，执行它
+                                if trimmed_line.ends_with(';') {
+                                    // 移除分号和多余空格
+                                    let statement = current_statement.trim_end_matches(';').trim();
+                                    if !statement.is_empty() {
+                                        // 执行单个语句
+                                        execute_sql(&mut stream, statement);
+                                    }
+                                    // 重置当前语句
+                                    current_statement.clear();
+                                }
+                            }
+                            
+                            // 执行最后一个没有分号的语句
+                            let statement = current_statement.trim();
                             if !statement.is_empty() {
-                                // 执行单个语句
                                 execute_sql(&mut stream, statement);
                             }
-                            // 重置当前语句
-                            current_statement.clear();
+                            
+                            println!("✓ Successfully executed commands from file: {}", file_path);
+                        }
+                        Err(err) => {
+                            eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
                         }
                     }
-                    
-                    // 执行最后一个没有分号的语句
-                    let statement = current_statement.trim();
-                    if !statement.is_empty() {
-                        execute_sql(&mut stream, statement);
-                    }
-                    
-                    println!("✓ Successfully executed commands from file: {}", file_path);
+                    continue;
                 }
-                Err(err) => {
-                    eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
-                }
-            }
-            continue;
-        }
 
-        execute_sql(&mut stream, original_line);
+                execute_sql(&mut stream, original_line);
+            },
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                // 处理Ctrl+C信号，退出循环
+                println!("\nReceived interrupt signal, exiting...");
+                break;
+            },
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
+            }
+        }
     }
 
-    // 关闭连接
-    writeln!(stream, "CLOSE").unwrap();
-    stream.flush().unwrap();
+    // 关闭连接，优雅处理可能的错误
+    if let Err(e) = writeln!(stream, "CLOSE") {
+        eprintln!("Failed to send close command: {}", e);
+    } else if let Err(e) = stream.flush() {
+        eprintln!("Failed to flush close command: {}", e);
+    }
 }
 
 fn execute_sql(stream: &mut TcpStream, sql: &str) {
