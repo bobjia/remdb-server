@@ -1,6 +1,9 @@
 use clap::Parser;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use ctrlc;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -28,6 +31,15 @@ struct Cli {
 }
 
 fn main() {
+    // 创建退出标志
+    let should_exit = Arc::new(AtomicBool::new(false));
+    let should_exit_clone = should_exit.clone();
+    
+    // 设置Ctrl+C处理
+    ctrlc::set_handler(move || {
+        should_exit_clone.store(true, Ordering::SeqCst);
+    }).expect("Failed to set Ctrl+C handler");
+    
     let cli = Cli::parse();
 
     // 连接到JDBC服务器
@@ -80,6 +92,12 @@ fn main() {
     let mut reader = BufReader::new(stdin.lock());
     
     loop {
+        // 检查退出标志
+        if should_exit.load(Ordering::SeqCst) {
+            println!("\nReceived interrupt signal, exiting...");
+            break;
+        }
+        
         print!("remdbcli> ");
         io::stdout().flush().unwrap();
 
@@ -131,7 +149,6 @@ fn main() {
                                     continue;
                                 }
                                 
-                                // 添加当前行到语句
                                 current_statement.push_str(trimmed_line);
                                 current_statement.push(' ');
                                 
