@@ -324,4 +324,8 @@ fn print_help() {
     println!("  create index ...               - Create a new index");
     println!("  stat                           - Show database monitoring statistics");
     println!("  healthcheck                    - Check database health status");
+    println!("  begin, begin transaction       - Start a new transaction");
+    println!("  commit                         - Commit current transaction");
+    println!("  rollback                       - Rollback current transaction");
+    println!("  flush                          - Flush WAL logs to disk");
 }

@@ -596,18 +596,24 @@ async fn main() {
     let message = "remdb-server v0.1.0";
     println!("{}", message);
 
+    // 确定要使用的配置文件路径
+    let config_path = if let Some(path) = &args.config {
+        path.clone()
+    } else {
+        // 默认使用 remdb-master.toml
+        "./remdb-master.toml".to_string()
+    };
+    
     // 提前解析配置文件，获取完整的 debug 模式设置
     let mut config = Config::default();
-    if let Some(config_path) = &args.config {
-        match fs::read_to_string(config_path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(parsed_config) => {
-                    config = parsed_config;
-                },
-                Err(_) => {},
+    match fs::read_to_string(&config_path) {
+        Ok(content) => match toml::from_str(&content) {
+            Ok(parsed_config) => {
+                config = parsed_config;
             },
             Err(_) => {},
-        }
+        },
+        Err(_) => {},
     }
     
     // 计算最终的 debug 模式
@@ -622,29 +628,27 @@ async fn main() {
     
     // 重新初始化配置，因为上面的代码只是为了获取 debug 模式
     let mut config = Config::default();
-    if let Some(config_path) = &args.config {
-        let message = format!("Reading config file: {}", config_path);
-        println!("{}", message);
-        match fs::read_to_string(config_path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(parsed_config) => {
-                    config = parsed_config;
-                    let message = "Config file loaded successfully";
-                    println!("{}", message);
-                }
-                Err(err) => {
-                    let message = format!("Warning: Failed to parse config file: {:?}", err);
-                    eprintln!("{}", message);
-                    let message = "Using default config values";
-                    eprintln!("{}", message);
-                }
-            },
+    let message = format!("Reading config file: {}", config_path);
+    println!("{}", message);
+    match fs::read_to_string(&config_path) {
+        Ok(content) => match toml::from_str(&content) {
+            Ok(parsed_config) => {
+                config = parsed_config;
+                let message = "Config file loaded successfully";
+                println!("{}", message);
+            }
             Err(err) => {
-                let message = format!("Warning: Failed to read config file: {:?}", err);
+                let message = format!("Warning: Failed to parse config file: {:?}", err);
                 eprintln!("{}", message);
                 let message = "Using default config values";
                 eprintln!("{}", message);
             }
+        },
+        Err(err) => {
+            let message = format!("Warning: Failed to read config file: {:?}", err);
+            eprintln!("{}", message);
+            let message = "Using default config values";
+            eprintln!("{}", message);
         }
     }
 
