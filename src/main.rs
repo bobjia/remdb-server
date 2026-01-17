@@ -357,7 +357,6 @@ struct HaConfig {
 #[derive(Deserialize, Debug, Default)]
 struct Config {
     
-
     /// 快照存储目录
     snapshot_dir: Option<String>,
 
@@ -765,11 +764,7 @@ async fn main() {
     let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = (Vec::new(), Vec::new());
 
     // 创建默认内存分配器
-    static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator =
-        remdb::config::DefaultMemoryAllocator;
-
-    // 使用更大的默认最大记录数，允许更多记录
-    let small_max_records = 1000; // 允许1000条记录
+    static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator = remdb::config::DefaultMemoryAllocator;
 
     // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
     let static_tables = Box::leak(Box::new(tables));
@@ -807,8 +802,8 @@ async fn main() {
         tables: static_tables,
         total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
         low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
-        low_power_max_records: Some(low_power_max_records.unwrap_or(100)), // 默认100条记录
-        default_max_records: default_max_records.unwrap_or(small_max_records), // 使用配置文件或命令行参数中的默认值，否则使用1000
+        low_power_max_records: low_power_max_records, // 使用配置文件或命令行参数中的值
+        default_max_records: default_max_records.unwrap_or(10000), // 使用配置文件或命令行参数中的默认值，否则使用10000
         memory_allocator: unsafe {
             &*(&raw const DEFAULT_ALLOCATOR as *const _)
                 as &'static dyn remdb::config::MemoryAllocator
@@ -1026,6 +1021,33 @@ async fn main() {
         log_println!("JDBC server is disabled");
     }
 
+    // 添加定时器线程，定期检查是否需要创建checkpoint
+    let checkpoint_interval = wal_checkpoint_interval_ms.unwrap_or(30000);
+    if checkpoint_interval > 0 {
+        log_println!("Starting checkpoint timer with interval {} ms", checkpoint_interval);
+        
+        // 在后台启动checkpoint定时器
+        tokio::spawn(async move {
+            let interval = tokio::time::Duration::from_millis(checkpoint_interval as u64);
+            let mut timer = tokio::time::interval(interval);
+            
+            loop {
+                timer.tick().await;
+                
+                // 尝试获取LogManager并检查是否需要创建checkpoint
+                unsafe {
+                    // 使用原始指针访问静态可变变量，避免创建可变引用
+                    let tx_manager_ptr = &raw mut remdb::transaction::TX_MANAGER;
+                    let log_manager_opt = (*tx_manager_ptr).get_log_manager_mut();
+                    if let Some(log_manager) = log_manager_opt {
+                        // 调用检查函数，忽略错误
+                        let _ = log_manager.check_flush_and_checkpoint();
+                    }
+                }
+            }
+        });
+    }
+    
     // 初始化并启动PubSub系统（如果启用）
     if pubsub_enabled.unwrap_or(false) {
         use remdb::pubsub::{PubSubConfig, UdpMode, init as pubsub_init};

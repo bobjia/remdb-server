@@ -38,7 +38,7 @@ CREATE INDEX idx_products_price ON products (price);
 CREATE INDEX idx_orders_user_id ON orders (user_id);
 
 -- 创建订单表的产品ID索引
-CREATE INDEX idx_orders_product_id ON orders (product_id);
+-- CREATE INDEX idx_orders_product_id ON orders (product_id);
 
 
 insert into users (name, email, age, created_at) values ("bob1", "a", 1,111111);
