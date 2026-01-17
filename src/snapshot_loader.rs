@@ -272,8 +272,7 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
         
         // 尝试使用LogManager进行WAL重放
         unsafe {
-            let tx_manager = &raw mut remdb::transaction::TX_MANAGER;
-            if let Some(log_manager) = (*tx_manager).get_log_manager_mut() {
+            if let Some(log_manager) = remdb::transaction::get_log_manager() {
                 println!("✓ LogManager found, attempting recovery...");
                 
                 // 调试信息：LogManager found and ready for recovery

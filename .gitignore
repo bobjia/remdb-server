@@ -10,3 +10,4 @@ remdb/*
 *.wal
 db/*
 slave-db/*
+.idea/*

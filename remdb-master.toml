@@ -6,8 +6,8 @@ ddl = ""
 # 快照文件路径
 snapshot_dir = "./db/snapshot"
 
-# 数据库总内存大小（字节），默认100MB
-total_memory = 104857600
+# 数据库总内存大小（字节），默认1GB
+total_memory = 1073741824
 
 # 是否支持低功耗模式，默认true
 low_power_mode_supported = false
@@ -27,7 +27,7 @@ log_path = "./db/wal"
 # 日志模式，可选值：async, sync
 log_mode = "async"
 # 检查点间隔（毫秒），默认30000
-checkpoint_interval_ms = 10000
+checkpoint_interval_ms = 30000
 # 日志文件大小限制（字节），默认16MB
 log_file_size_limit = 16777216
 # 日志预分配大小（字节），默认4MB

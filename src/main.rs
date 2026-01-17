@@ -1035,14 +1035,23 @@ async fn main() {
                 timer.tick().await;
                 
                 // 尝试获取LogManager并检查是否需要创建checkpoint
-                unsafe {
-                    // 使用原始指针访问静态可变变量，避免创建可变引用
-                    let tx_manager_ptr = &raw mut remdb::transaction::TX_MANAGER;
-                    let log_manager_opt = (*tx_manager_ptr).get_log_manager_mut();
-                    if let Some(log_manager) = log_manager_opt {
-                        // 调用检查函数，忽略错误
-                        let _ = log_manager.check_flush_and_checkpoint();
+                let log_manager_opt = unsafe { remdb::transaction::get_log_manager() };
+                if let Some(log_manager) = log_manager_opt {
+                    // 记录开始时间
+                    let start = std::time::Instant::now();
+                    
+                    // 调用检查函数，记录结果
+                    match unsafe { log_manager.check_flush_and_checkpoint() } {
+                        Ok(()) => {
+                            let duration = start.elapsed();
+                            println!("[Checkpoint Timer] Checkpoint executed successfully in {:?}", duration);
+                        },
+                        Err(e) => {
+                            println!("[Checkpoint Timer] Failed to execute checkpoint: {:?}", e);
+                        }
                     }
+                } else {
+                    println!("[Checkpoint Timer] LogManager not available");
                 }
             }
         });
