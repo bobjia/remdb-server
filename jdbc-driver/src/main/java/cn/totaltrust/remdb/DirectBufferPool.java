@@ -93,14 +93,11 @@ public class DirectBufferPool {
     public void close() {
         ByteBuffer buffer;
         while ((buffer = pool.poll()) != null) {
-            // 释放直接内存
+            // 清空缓冲区并让GC自动回收
+            // 移除了反射调用，因为Java 9+模块系统禁止访问cleaner()方法
             buffer.clear();
-            // 注意：Java中直接内存的释放是通过ByteBuffer的cleaner实现的
-            // 调用clean()方法可以立即释放，否则会等待GC
-            sun.misc.Cleaner cleaner = ((sun.nio.ch.DirectBuffer) buffer).cleaner();
-            if (cleaner != null) {
-                cleaner.clean();
-            }
+            // 清空引用，加速GC回收
+            buffer = null;
             currentSize--;
         }
     }

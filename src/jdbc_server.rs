@@ -45,7 +45,13 @@ impl JdbcServer {
         let worker_count = num_cpus::get();
 
         // 创建高性能组件
-        let protocol_handler = Arc::new(JdbcProtocolHandler::new(worker_count, db.clone()));
+        let protocol_handler = Arc::new(JdbcProtocolHandler::new(
+            worker_count, 
+            db.clone(),
+            auth_enabled,
+            username.clone(),
+            password_hash.clone(),
+        ));
         let connection_pool = Arc::new(HighPerfConnectionPool::new(max_connections));
         let system_tuner = Arc::new(SystemTuner::new());
 

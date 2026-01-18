@@ -2,11 +2,12 @@ use crate::proto::*;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
 use bytes::Bytes;
 use crossbeam::queue::SegQueue;
+use hex;
 use prost::Message;
 use rayon::prelude::*;
 use remdb::RemDb;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -24,6 +25,10 @@ pub struct JdbcProtocolHandler {
     metrics: HandlerMetrics,
     // 数据库引用
     db: Arc<std::sync::Mutex<&'static mut RemDb>>,
+    // 认证配置
+    auth_enabled: bool,
+    username: String,
+    password_hash: String,
 }
 
 /// 工作线程
@@ -31,6 +36,10 @@ struct WorkerThread {
     id: u32,
     handle: Option<std::thread::JoinHandle<()>>,
     stop_flag: Arc<std::sync::atomic::AtomicBool>,
+    // 认证配置
+    auth_enabled: bool,
+    username: String,
+    password_hash: String,
 }
 
 /// 处理器指标
@@ -87,11 +96,17 @@ impl WorkerThread {
         id: u32,
         request_queue: Arc<SegQueue<(JdbcRequest, mpsc::UnboundedSender<JdbcResponse>)>>,
         db: Arc<std::sync::Mutex<&'static mut RemDb>>,
+        auth_enabled: bool,
+        username: String,
+        password_hash: String,
     ) -> Self {
         let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag_clone = stop_flag.clone();
         let queue_clone = request_queue.clone();
         let db_clone = db.clone();
+        let auth_enabled_clone = auth_enabled;
+        let username_clone = username.clone();
+        let password_hash_clone = password_hash.clone();
 
         let handle = std::thread::spawn(move || {
             while !flag_clone.load(Ordering::SeqCst) {
@@ -101,6 +116,9 @@ impl WorkerThread {
                     let response = JdbcProtocolHandler::process_single_request(
                         &mut *db_clone.lock().unwrap(),
                         request,
+                        auth_enabled_clone,
+                        &username_clone,
+                        &password_hash_clone,
                     );
                     // 发送响应
                     if response_tx.send(response).is_err() {
@@ -117,18 +135,34 @@ impl WorkerThread {
             id,
             handle: Some(handle),
             stop_flag,
+            auth_enabled,
+            username,
+            password_hash,
         }
     }
 }
 
 impl JdbcProtocolHandler {
     /// 创建新的JDBC协议处理器
-    pub fn new(worker_count: usize, db: Arc<std::sync::Mutex<&'static mut RemDb>>) -> Self {
+    pub fn new(
+        worker_count: usize, 
+        db: Arc<std::sync::Mutex<&'static mut RemDb>>,
+        auth_enabled: bool,
+        username: String,
+        password_hash: String,
+    ) -> Self {
         let request_queue = Arc::new(SegQueue::new());
 
         let mut workers = Vec::with_capacity(worker_count);
         for i in 0..worker_count {
-            let worker = WorkerThread::new(i as u32, request_queue.clone(), db.clone());
+            let worker = WorkerThread::new(
+                i as u32, 
+                request_queue.clone(), 
+                db.clone(),
+                auth_enabled,
+                username.clone(),
+                password_hash.clone(),
+            );
             workers.push(worker);
         }
 
@@ -137,6 +171,9 @@ impl JdbcProtocolHandler {
             workers,
             metrics: HandlerMetrics::new(),
             db,
+            auth_enabled,
+            username,
+            password_hash,
         }
     }
 
@@ -250,7 +287,13 @@ impl JdbcProtocolHandler {
     }
 
     /// 处理单个请求
-    fn process_single_request(db: &mut RemDb, request: JdbcRequest) -> JdbcResponse {
+    fn process_single_request(
+        db: &mut RemDb, 
+        request: JdbcRequest, 
+        auth_enabled: bool,
+        expected_username: &str,
+        expected_password_hash: &str,
+    ) -> JdbcResponse {
         let start_time = Instant::now();
 
         // 创建默认响应
@@ -385,7 +428,26 @@ impl JdbcProtocolHandler {
             }
             Some(jdbc_request::Request::Connection(conn_req)) => {
                 // 处理连接请求
-                // TODO: 实现认证逻辑
+                if auth_enabled {
+                    // 验证用户名和密码
+                    let provided_username = conn_req.username;
+                    let provided_password = conn_req.password;
+                    
+                    // 计算提供的密码的SHA-256哈希值
+                    let mut hasher = Sha256::new();
+                    hasher.update(provided_password);
+                    let provided_hash = hasher.finalize();
+                    let provided_hash_str = hex::encode(provided_hash);
+                    
+                    // 比较用户名和哈希值
+                    if provided_username != expected_username || provided_hash_str != expected_password_hash {
+                        response.status = Status::Unauthorized.into();
+                        response.error_message = "Invalid username or password".to_string();
+                        return response;
+                    }
+                }
+                
+                // 认证成功，返回连接响应
                 let conn_response = ConnectionResponse {
                     connection_id: 1,
                     server_version: "0.1.0".to_string(),
@@ -456,11 +518,18 @@ impl JdbcProtocolHandler {
         // 串行处理请求，避免并行带来的锁问题
         let mut responses = Vec::with_capacity(batch.len());
         let mut db_lock = self.db.lock().unwrap();
+        
+        let auth_enabled = self.auth_enabled;
+        let username = self.username.clone();
+        let password_hash = self.password_hash.clone();
 
         for req in batch {
             responses.push(JdbcProtocolHandler::process_single_request(
                 &mut *db_lock,
                 req,
+                auth_enabled,
+                &username,
+                &password_hash,
             ));
         }
 

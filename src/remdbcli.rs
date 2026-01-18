@@ -24,7 +24,7 @@ struct Cli {
 
     /// Username for authentication
     #[arg(short, long, default_value = "root")]
-    username: Option<String>,
+    username: String,
 
     /// Password for authentication
     #[arg(short = 'P', long)]
@@ -77,10 +77,10 @@ fn main() {
     // 初始化request_id计数器
     let mut request_id = 1;
 
-    // 处理认证 - 暂时简化，后续完善
+    // 处理认证
     let connection_request = ConnectionRequest {
-        username: cli.username.clone().unwrap_or("root".to_string()),
-        password: cli.password.clone().unwrap_or("".to_string()),
+        username: cli.username.clone(),
+        password: cli.password.clone().unwrap_or_default(),
         database: "default".to_string(),
         fetch_size: 100,
         auto_commit: true,

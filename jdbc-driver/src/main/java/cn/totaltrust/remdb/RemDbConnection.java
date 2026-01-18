@@ -8,56 +8,251 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.net.InetSocketAddress;
+import java.nio.ByteOrder;
+import com.google.protobuf.InvalidProtocolBufferException;
+import jdbc.Jdbc;
 
 public class RemDbConnection implements Connection {
     private SocketChannel channel;
     private Socket socket;
-    private PrintWriter writer;
-    private BufferedReader reader;
     private boolean closed = false;
     private boolean autoCommit = true;
     private boolean inTransaction = false;
     private int transactionIsolation = TRANSACTION_READ_COMMITTED;
     private DirectBufferPool bufferPool;
     private boolean zeroCopyEnabled = true;
+    private long requestId = 0;
+    private final ByteBuffer lenBuffer = ByteBuffer.allocate(4); // 4字节长度前缀
+    private final ByteBuffer recvBuffer = ByteBuffer.allocateDirect(65536); // 64KB接收缓冲区
 
     public RemDbConnection(String host, int port, String user, String password) throws SQLException {
         try {
             // 创建直接内存缓冲池（16个8KB缓冲区）
             this.bufferPool = new DirectBufferPool(16, 8192);
             
-            // 创建SocketChannel
-            this.channel = SocketChannel.open();
-            this.channel.configureBlocking(true);
+            // 创建Socket
+            this.socket = new Socket();
             
-            // 连接服务器
-            this.channel.connect(new InetSocketAddress(host, port));
-            this.socket = channel.socket();
-            
-            // 优化TCP参数
+            // 设置TCP参数
             socket.setTcpNoDelay(true); // 禁用Nagle算法
             socket.setKeepAlive(true);   // 启用TCP keepalive
             socket.setReuseAddress(true); // 启用地址重用
+            socket.setSoTimeout(15000); // 设置读取超时为15秒
+            socket.setSoLinger(false, 0); // 禁用SO_LINGER，立即关闭连接
             
             // 设置接收和发送缓冲区大小
             socket.setReceiveBufferSize(65536);
             socket.setSendBufferSize(65536);
             
-            // 创建传统IO流（用于兼容现有文本协议）
-            this.writer = new PrintWriter(channel.socket().getOutputStream(), true);
-            this.reader = new BufferedReader(new InputStreamReader(channel.socket().getInputStream()));
+            // 设置连接超时（5秒）
+            socket.connect(new InetSocketAddress(host, port), 5000);
             
-            // Send AUTH command only if both username and password are non-empty
-            if (!user.isEmpty() && !password.isEmpty()) {
-                String authCommand = "AUTH|" + user + "|" + password;
-                writer.println(authCommand);
-                String response = reader.readLine();
-                if (response == null || response.startsWith("ERROR|")) {
-                    throw new SQLException("Authentication failed: " + (response != null ? response.substring(6) : "No response"));
-                }
-            }
+            // 创建SocketChannel（仅用于零拷贝，不用于常规IO）
+            this.channel = SocketChannel.open(socket.getRemoteSocketAddress());
+            this.channel.configureBlocking(true);
+            
+            // 使用Thread.interrupt()实现超时处理
+            initializeConnectionWithTimeout(user, password);
+        } catch (java.net.SocketTimeoutException e) {
+            throw new SQLException("Failed to connect to RemDb server: Connection timed out. Please check if the server is running on port " + port + ".", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Connection interrupted: " + e.getMessage(), e);
         } catch (IOException e) {
             throw new SQLException("Failed to connect to RemDb server: " + e.getMessage(), e);
+        }
+    }
+    
+    // 初始化连接，发送连接请求
+    private void initializeConnection(String user, String password) throws SQLException, IOException {
+        // 构建连接请求
+        Jdbc.JdbcRequest request = buildConnectionRequestMessage(user, password);
+        
+        // 发送请求（包含4字节长度前缀）
+        sendJdbcRequest(request);
+        
+        // 接收响应
+        Jdbc.JdbcResponse response = receiveJdbcResponse();
+        
+        // 处理连接响应
+        handleConnectionResponse(response);
+    }
+    
+    // 使用单独的线程实现超时处理的初始化连接方法
+    private void initializeConnectionWithTimeout(String user, String password) throws SQLException, IOException, InterruptedException {
+        // 创建一个线程来执行初始化连接
+        final SQLException[] sqlException = {null};
+        final IOException[] ioException = {null};
+        
+        Thread initThread = new Thread(() -> {
+            try {
+                initializeConnection(user, password);
+            } catch (SQLException e) {
+                sqlException[0] = e;
+            } catch (IOException e) {
+                ioException[0] = e;
+            }
+        });
+        
+        // 启动线程
+        initThread.start();
+        
+        // 等待线程执行完成，最多等待15秒
+        initThread.join(15000);
+        
+        // 检查线程是否还在运行
+        if (initThread.isAlive()) {
+            // 超时，中断线程
+            initThread.interrupt();
+            throw new java.net.SocketTimeoutException("Connection initialization timed out after 15 seconds");
+        }
+        
+        // 检查是否有异常
+        if (sqlException[0] != null) {
+            throw sqlException[0];
+        }
+        if (ioException[0] != null) {
+            throw ioException[0];
+        }
+    }
+    
+    private long nextRequestId() {
+        requestId += 1;
+        return requestId;
+    }
+    
+    private void sendJdbcRequest(Jdbc.JdbcRequest request) throws IOException {
+        sendRequest(request.toByteArray());
+    }
+    
+    private Jdbc.JdbcResponse receiveJdbcResponse() throws IOException, SQLException {
+        byte[] responseData = receiveResponse();
+        try {
+            return Jdbc.JdbcResponse.parseFrom(responseData);
+        } catch (InvalidProtocolBufferException e) {
+            throw new SQLException("Invalid JDBC response format: " + e.getMessage(), e);
+        }
+    }
+    
+    // 构建连接请求
+    private Jdbc.JdbcRequest buildConnectionRequestMessage(String user, String password) {
+        Jdbc.ConnectionRequest connection = Jdbc.ConnectionRequest.newBuilder()
+            .setUsername(user)
+            .setPassword(password)
+            .setDatabase("default")
+            .setFetchSize(100)
+            .setAutoCommit(true)
+            .build();
+
+        return Jdbc.JdbcRequest.newBuilder()
+            .setRequestId(nextRequestId())
+            .setConnection(connection)
+            .build();
+    }
+    
+    private Jdbc.JdbcRequest buildQueryRequestMessage(String sql) {
+        Jdbc.QueryRequest query = Jdbc.QueryRequest.newBuilder()
+            .setSql(sql)
+            .setFetchSize(100)
+            .setUseCursor(false)
+            .build();
+
+        return Jdbc.JdbcRequest.newBuilder()
+            .setRequestId(nextRequestId())
+            .setQuery(query)
+            .build();
+    }
+    
+    private Jdbc.JdbcRequest buildBeginRequestMessage() {
+        Jdbc.BeginTransaction begin = Jdbc.BeginTransaction.newBuilder()
+            .setType(Jdbc.TransactionType.READ_WRITE)
+            .setIsolationLevel(Jdbc.IsolationLevel.READ_COMMITTED)
+            .build();
+
+        return Jdbc.JdbcRequest.newBuilder()
+            .setRequestId(nextRequestId())
+            .setBeginTransaction(begin)
+            .build();
+    }
+    
+    private Jdbc.JdbcRequest buildCommitRequestMessage() {
+        return Jdbc.JdbcRequest.newBuilder()
+            .setRequestId(nextRequestId())
+            .setCommitTransaction(Jdbc.CommitTransaction.newBuilder().build())
+            .build();
+    }
+    
+    private Jdbc.JdbcRequest buildRollbackRequestMessage() {
+        return Jdbc.JdbcRequest.newBuilder()
+            .setRequestId(nextRequestId())
+            .setRollbackTransaction(Jdbc.RollbackTransaction.newBuilder().build())
+            .build();
+    }
+    
+    // 发送请求（包含4字节长度前缀）
+    private void sendRequest(byte[] data) throws IOException {
+        // 确保缓冲区处于写入模式
+        lenBuffer.clear();
+        
+        // 写入4字节长度前缀（大端序）
+        lenBuffer.putInt(data.length);
+        lenBuffer.flip();
+        
+        // 使用socket的输出流进行写入
+        OutputStream outputStream = socket.getOutputStream();
+        
+        // 发送长度前缀
+        outputStream.write(lenBuffer.array());
+        
+        // 发送请求数据
+        outputStream.write(data);
+        outputStream.flush();
+    }
+    
+    // 接收响应
+    private byte[] receiveResponse() throws IOException {
+        // 使用socket的输入流进行读取，依赖socket.setSoTimeout()设置的超时
+        InputStream inputStream = socket.getInputStream();
+        
+        // 读取4字节长度前缀
+        byte[] lenBytes = new byte[4];
+        int bytesRead = 0;
+        while (bytesRead < 4) {
+            int read = inputStream.read(lenBytes, bytesRead, 4 - bytesRead);
+            if (read == -1) {
+                throw new IOException("Connection closed while reading response length");
+            }
+            bytesRead += read;
+        }
+        
+        // 获取响应数据长度（大端序）
+        int responseLength = ((lenBytes[0] & 0xFF) << 24) | 
+                            ((lenBytes[1] & 0xFF) << 16) | 
+                            ((lenBytes[2] & 0xFF) << 8) | 
+                            (lenBytes[3] & 0xFF);
+        
+        // 读取响应数据
+        byte[] responseData = new byte[responseLength];
+        int totalRead = 0;
+        while (totalRead < responseLength) {
+            int read = inputStream.read(responseData, totalRead, responseLength - totalRead);
+            if (read == -1) {
+                throw new IOException("Connection closed while reading response data");
+            }
+            totalRead += read;
+        }
+        
+        return responseData;
+    }
+    
+    // 处理连接响应
+    private void handleConnectionResponse(Jdbc.JdbcResponse response) throws SQLException {
+        if (response.getStatus() != Jdbc.Status.OK) {
+            String message = response.getErrorMessage();
+            if (message == null || message.isEmpty()) {
+                message = "Connection failed with status: " + response.getStatus().name();
+            }
+            throw new SQLException(message);
         }
     }
 
@@ -147,9 +342,7 @@ public class RemDbConnection implements Connection {
     public void close() throws SQLException {
         if (!closed) {
             try {
-                writer.println("CLOSE");
-                reader.close();
-                writer.close();
+                // 关闭资源
                 channel.close();
                 socket.close();
                 
@@ -158,6 +351,15 @@ public class RemDbConnection implements Connection {
                 
                 closed = true;
             } catch (IOException e) {
+                // 忽略关闭过程中的异常，确保资源被释放
+                try {
+                    channel.close();
+                    socket.close();
+                    bufferPool.close();
+                } catch (IOException ex) {
+                    // 再次忽略
+                }
+                closed = true;
                 throw new SQLException("Failed to close connection: " + e.getMessage(), e);
             }
         }
@@ -470,14 +672,114 @@ public class RemDbConnection implements Connection {
     String executeCommand(String command) throws SQLException {
         checkClosed();
         try {
-            // Set socket timeout to 15 seconds to prevent infinite blocking
-            socket.setSoTimeout(15000);
-            writer.println(command);
-            return reader.readLine();
+            Jdbc.JdbcRequest request;
+            String normalized = command.trim();
+            
+            if (normalized.startsWith("EXECUTE|")) {
+                String sql = normalized.substring("EXECUTE|".length());
+                request = buildQueryRequestMessage(sql);
+            } else if (normalized.equalsIgnoreCase("BEGIN") || normalized.equalsIgnoreCase("BEGIN TRANSACTION")) {
+                request = buildBeginRequestMessage();
+            } else if (normalized.equalsIgnoreCase("COMMIT")) {
+                request = buildCommitRequestMessage();
+            } else if (normalized.equalsIgnoreCase("ROLLBACK")) {
+                request = buildRollbackRequestMessage();
+            } else {
+                request = buildQueryRequestMessage(normalized);
+            }
+            
+            sendJdbcRequest(request);
+            Jdbc.JdbcResponse response = receiveJdbcResponse();
+            return convertResponseToLegacyString(response);
         } catch (java.net.SocketTimeoutException e) {
             throw new SQLException("Command timed out. Is the RemDb server running?", e);
         } catch (IOException e) {
             throw new SQLException("Failed to execute command: " + e.getMessage(), e);
+        }
+    }
+
+    private String convertResponseToLegacyString(Jdbc.JdbcResponse response) {
+        if (response.getStatus() != Jdbc.Status.OK) {
+            String message = response.getErrorMessage();
+            if (message == null || message.isEmpty()) {
+                message = response.getStatus().name();
+            }
+            return "ERROR|" + message;
+        }
+
+        if (response.hasResultSet()) {
+            Jdbc.ResultSetResponse resultSet = response.getResultSet();
+            StringBuilder columns = new StringBuilder();
+            for (int i = 0; i < resultSet.getColumnsCount(); i++) {
+                if (i > 0) {
+                    columns.append(",");
+                }
+                columns.append(resultSet.getColumns(i).getName());
+            }
+
+            StringBuilder rows = new StringBuilder();
+            for (int i = 0; i < resultSet.getRowsCount(); i++) {
+                if (i > 0) {
+                    rows.append(";");
+                }
+                Jdbc.RowData row = resultSet.getRows(i);
+                for (int j = 0; j < row.getValuesCount(); j++) {
+                    if (j > 0) {
+                        rows.append(",");
+                    }
+                    rows.append(valueToString(row.getValues(j)));
+                }
+            }
+
+            return "OK|" + resultSet.getRowCount() + "|" + resultSet.getColumnsCount() + "|" + columns + "|" + rows;
+        }
+
+        if (response.hasUpdate()) {
+            Jdbc.UpdateResponse update = response.getUpdate();
+            return "OK|" + update.getAffectedRows() + "|0|";
+        }
+
+        return "OK|0|0|";
+    }
+
+    private String valueToString(Jdbc.Value value) {
+        switch (value.getValueCase()) {
+            case BOOLEAN_VALUE:
+                return String.valueOf(value.getBooleanValue());
+            case INT32_VALUE:
+                return String.valueOf(value.getInt32Value());
+            case INT64_VALUE:
+                return String.valueOf(value.getInt64Value());
+            case FLOAT_VALUE:
+                return String.valueOf(value.getFloatValue());
+            case DOUBLE_VALUE:
+                return String.valueOf(value.getDoubleValue());
+            case STRING_VALUE:
+                return value.getStringValue();
+            case BYTES_VALUE:
+                return value.getBytesValue().toStringUtf8();
+            case UINT64_VALUE:
+                return String.valueOf(value.getUint64Value());
+            case SINT64_VALUE:
+                return String.valueOf(value.getSint64Value());
+            case FIXED32_VALUE:
+                return String.valueOf(value.getFixed32Value());
+            case FIXED64_VALUE:
+                return String.valueOf(value.getFixed64Value());
+            case SFIXED32_VALUE:
+                return String.valueOf(value.getSfixed32Value());
+            case SFIXED64_VALUE:
+                return String.valueOf(value.getSfixed64Value());
+            case DATE_VALUE:
+                return value.getDateValue().toStringUtf8();
+            case TIME_VALUE:
+                return value.getTimeValue().toStringUtf8();
+            case TIMESTAMP_VALUE:
+                return value.getTimestampValue().toStringUtf8();
+            case NULL_VALUE:
+            case VALUE_NOT_SET:
+            default:
+                return "NULL";
         }
     }
     

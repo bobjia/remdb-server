@@ -227,7 +227,7 @@ message LockFreeAccess {
 
 // 零拷贝数据传输
 message ZeroCopyData {
-  bytes descriptor = 1;  // 内存区域描述符
+  bytes desc = 1;  // 内存区域描述符
   uint64 offset = 2;
   uint64 length = 3;
   uint32 compression = 4;  // 0=none, 1=lz4, 2=zstd
