@@ -5,6 +5,12 @@ ddl = ""
 
 # 快照文件路径
 snapshot_dir = "./slave-db/snapshot"
+# 增量快照周期
+snapshot_interval = 600000
+# 快照类型：full（全量）或incremental（增量）
+snapshot_type = "incremental"
+# 快照周期（秒）
+snapshot_interval = 3600
 
 # 数据库总内存大小（字节），默认100MB
 total_memory = 104857600

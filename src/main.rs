@@ -378,6 +378,9 @@ struct Config {
     /// 增量快照周期（秒）
     snapshot_interval: Option<u64>,
 
+    /// 快照类型：full（全量）或incremental（增量）
+    snapshot_type: Option<String>,
+
     /// 最大增量快照数量
     max_incremental_snapshots: Option<usize>,
 
@@ -473,6 +476,10 @@ struct Args {
     /// 增量快照周期（秒）
     #[arg(long)]
     snapshot_interval: Option<u64>,
+
+    /// 快照类型：full（全量）或incremental（增量）
+    #[arg(long)]
+    snapshot_type: Option<String>,
 
     /// 最大增量快照数量
     #[arg(long)]
@@ -672,6 +679,7 @@ async fn main() {
     let low_power_max_records = args.low_power_max_records.or(config.low_power_max_records);
     let log_path = args.log_path.or(wal_log_path).or(config.log_path);
     let snapshot_interval = args.snapshot_interval.or(config.snapshot_interval);
+    let snapshot_type = args.snapshot_type.or(config.snapshot_type);
     let max_incremental_snapshots = args
         .max_incremental_snapshots
         .or(config.max_incremental_snapshots);
@@ -1055,6 +1063,68 @@ async fn main() {
                 }
             }
         });
+    }
+    
+    // 添加定时器线程，定期创建快照
+    if let Some(interval_secs) = snapshot_interval {
+        if let Some(snap_type) = &snapshot_type {
+            let snap_type = snap_type.to_lowercase();
+            if snap_type == "full" || snap_type == "incremental" {
+                // 克隆快照目录和其他配置，确保它们的生命周期足够长
+                let snapshot_dir_clone = snapshot_dir.clone();
+                let max_snapshots = max_incremental_snapshots.unwrap_or(10);
+                
+                log_println!("Starting snapshot timer with interval {} seconds, type: {}", interval_secs, snap_type);
+                
+                // 在后台启动快照定时器
+                tokio::spawn(async move {
+                    let interval = tokio::time::Duration::from_secs(interval_secs);
+                    let mut timer = tokio::time::interval(interval);
+                    
+                    loop {
+                        timer.tick().await;
+                        
+                        // 尝试获取全局数据库实例
+                        let db_opt = unsafe { remdb::get_global_db() };
+                        if let Some(mut db_guard) = db_opt {
+                            let db = &mut *db_guard;
+                            
+                            // 记录开始时间
+                            let start = std::time::Instant::now();
+                            
+                            // 根据配置的快照类型创建快照
+                            let result = if let Some(dir) = &snapshot_dir_clone {
+                                if snap_type == "full" {
+                                    snapshot_loader::save_full_snapshot_to_dir(db, dir)
+                                } else {
+                                    let res = snapshot_loader::save_incremental_snapshot_to_dir(db, dir);
+                                    // 如果是增量快照，清理旧的快照
+                                    if res.is_ok() {
+                                        let _ = snapshot_loader::cleanup_old_snapshots(dir, max_snapshots);
+                                    }
+                                    res
+                                }
+                            } else {
+                                Err(remdb::RemDbError::FileIoError)
+                            };
+                            
+                            // 记录结果
+                            match result {
+                                Ok(()) => {
+                                    let duration = start.elapsed();
+                                    println!("[Snapshot Timer] {} snapshot executed successfully in {:?}", snap_type, duration);
+                                },
+                                Err(e) => {
+                                    println!("[Snapshot Timer] Failed to execute {} snapshot: {:?}", snap_type, e);
+                                }
+                            }
+                        } else {
+                            println!("[Snapshot Timer] Database not available");
+                        }
+                    }
+                });
+            }
+        }
     }
     
     // 初始化并启动PubSub系统（如果启用）
