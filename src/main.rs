@@ -1,19 +1,22 @@
-use remdb::{ha::{HARole, ReplicationMode}, RemDb};
+use remdb::{
+    RemDb,
+    ha::{HARole, ReplicationMode},
+};
 
 use clap::Parser;
 use core::ptr;
+use remdb_server::jdbc_server::JdbcServer;
+use remdb_server::{is_debug_mode, set_debug_mode, set_global_log_handle};
 use serde::Deserialize;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tokio::sync::Mutex as TokioMutex;
-use remdb_server::{set_debug_mode, set_global_log_handle, is_debug_mode};
-use remdb_server::jdbc_server::JdbcServer;
 
 #[macro_use]
 mod macros;
+mod benchmark;
 mod cli;
 mod ddl_compiler;
 mod snapshot_loader;
@@ -26,28 +29,31 @@ static mut LOG_FILE_HANDLE: Option<Arc<Mutex<std::fs::File>>> = None;
 pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
     // 创建日志目录
     std::fs::create_dir_all(log_path)?;
-    
+
     // 获取当前日期作为日志文件名
     let now = SystemTime::now();
-    let timestamp = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+    let timestamp = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let log_file_path = format!("{}/remdb-server-{}.log", log_path, timestamp);
-    
+
     // 打开日志文件，以追加模式写入
     let file = OpenOptions::new()
         .create(true)
         .append(true)
         .write(true)
         .open(log_file_path)?;
-    
+
     // 将文件句柄包装到Arc<Mutex>中，以便多线程安全访问
     let file_handle = Arc::new(Mutex::new(file));
-    
+
     // 保存到全局变量
     unsafe {
         LOG_FILE_HANDLE = Some(file_handle.clone());
         set_global_log_handle(file_handle);
     }
-    
+
     Ok(())
 }
 
@@ -61,8 +67,6 @@ pub fn write_log_to_file(message: &str) {
         }
     }
 }
-
-
 
 /// 重定义标准println宏，使其同时输出到控制台和日志文件
 macro_rules! log_println {
@@ -299,22 +303,22 @@ static WINDOWS_PLATFORM: WindowsPlatform = WindowsPlatform;
 struct WALConfig {
     /// 日志文件路径
     log_path: Option<String>,
-    
+
     /// 日志模式，可选值：async, sync
     log_mode: Option<String>,
-    
+
     /// 检查点间隔（毫秒）
     checkpoint_interval_ms: Option<u64>,
-    
+
     /// 日志文件大小限制（字节）
     log_file_size_limit: Option<usize>,
-    
+
     /// 日志预分配大小（字节）
     log_prealloc_size: Option<usize>,
-    
+
     /// 日志段大小（字节）
     log_segment_size: Option<usize>,
-    
+
     /// 保留的检查点数量
     retained_checkpoints: Option<usize>,
 }
@@ -347,16 +351,15 @@ struct HaConfig {
     master_address: Option<String>,
 
     /// 主节点端口（仅slave节点需要）
-    master_port: Option<u16>,    
+    master_port: Option<u16>,
 
     /// 复制端口（用于WAL日志复制和数据同步）
-    replication_port: Option<u16>,    
+    replication_port: Option<u16>,
 }
 
 /// 配置文件结构体
 #[derive(Deserialize, Debug, Default)]
 struct Config {
-    
     /// 快照存储目录
     snapshot_dir: Option<String>,
 
@@ -371,7 +374,7 @@ struct Config {
 
     /// 低功耗模式下的最大记录数
     low_power_max_records: Option<usize>,
-    
+
     /// 日志文件路径
     log_path: Option<String>,
 
@@ -439,11 +442,12 @@ struct PubSubConfig {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// 配置文件路径
     #[arg(long, short)]
     config: Option<String>,
-
-    
 
     /// 快照存储目录
     #[arg(long)]
@@ -468,7 +472,7 @@ struct Args {
     /// 低功耗模式下的最大记录数
     #[arg(long)]
     low_power_max_records: Option<usize>,
-    
+
     /// 日志文件路径
     #[arg(long)]
     log_path: Option<String>,
@@ -576,11 +580,11 @@ struct Args {
     /// 主节点端口（仅slave节点需要）
     #[arg(long)]
     ha_master_port: Option<u16>,
-    
+
     /// 复制端口（用于WAL日志复制和数据同步）
     #[arg(long)]
     ha_replication_port: Option<u16>,
-    
+
     /// 心跳端口（用于节点间心跳检测）
     #[arg(long)]
     ha_heartbeat_port: Option<u16>,
@@ -590,17 +594,104 @@ struct Args {
     ha_node_id: Option<String>,
 }
 
+/// 子命令定义
+#[derive(Parser, Debug)]
+enum Command {
+    /// 运行基准测试
+    Benchmark {
+        /// 查询次数
+        #[arg(long, default_value = "100000")]
+        query_count: usize,
+
+        /// 并发连接数
+        #[arg(long, default_value = "16")]
+        connections: usize,
+
+        /// 查询模板
+        #[arg(long, default_value = "SELECT * FROM test_table WHERE id = {}")]
+        query_template: String,
+
+        /// 服务器URL
+        #[arg(long, default_value = "jdbc:remdb://localhost:6666")]
+        server_url: String,
+
+        /// 测试类型（query、write或mix）
+        #[arg(long, default_value = "query")]
+        test_type: String,
+
+        /// 写入模板
+        #[arg(
+            long,
+            default_value = "INSERT INTO test_table (id, value) VALUES ({}, {}) ON DUPLICATE KEY UPDATE value = {}"
+        )]
+        write_template: String,
+
+        /// 读写比例，格式为"8:2"
+        #[arg(long, default_value = "8:2")]
+        read_write_ratio: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     // 在程序最开始就设置默认的 RUST_LOG 环境变量
     unsafe {
         std::env::set_var("RUST_LOG", "error");
     }
-    
+
     let args = Args::parse();
 
     let message = "remdb-server v0.1.0";
     println!("{}", message);
+
+    // 处理子命令
+    if let Some(Command::Benchmark {
+        query_count,
+        connections,
+        query_template,
+        server_url,
+        test_type,
+        write_template,
+        read_write_ratio,
+    }) = args.command
+    {
+        // 导入基准测试模块
+        use benchmark::{BenchmarkConfig, run_benchmark};
+
+        // 解析读写比例
+        let read_write_ratio = match read_write_ratio
+            .split(":")
+            .map(|s| s.parse::<usize>())
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [Ok(read), Ok(write)] => (*read, *write),
+            _ => {
+                eprintln!("Invalid read_write_ratio format. Expected format: \"8:2\".");
+                std::process::exit(1);
+            }
+        };
+
+        let config = BenchmarkConfig {
+            server_url,
+            connection_count: connections,
+            query_count,
+            query_template,
+            run_duration_secs: None,
+            test_type,
+            write_template,
+            read_write_ratio,
+        };
+
+        match run_benchmark(config).await {
+            Ok(_) => println!("\nBenchmark completed successfully!"),
+            Err(e) => {
+                eprintln!("\nBenchmark failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // 确定要使用的配置文件路径
     let config_path = if let Some(path) = &args.config {
@@ -609,29 +700,29 @@ async fn main() {
         // 默认使用 remdb-master.toml
         "./remdb-master.toml".to_string()
     };
-    
+
     // 提前解析配置文件，获取完整的 debug 模式设置
     let mut config = Config::default();
     match fs::read_to_string(&config_path) {
         Ok(content) => match toml::from_str(&content) {
             Ok(parsed_config) => {
                 config = parsed_config;
-            },
-            Err(_) => {},
+            }
+            Err(_) => {}
         },
-        Err(_) => {},
+        Err(_) => {}
     }
-    
+
     // 计算最终的 debug 模式
     let debug_mode = args.debug || config.debug.unwrap_or(false);
-    
+
     // 如果是 debug 模式，更新 RUST_LOG 环境变量
     if debug_mode {
         unsafe {
             std::env::set_var("RUST_LOG", "debug");
         }
     }
-    
+
     // 重新初始化配置，因为上面的代码只是为了获取 debug 模式
     let mut config = Config::default();
     let message = format!("Reading config file: {}", config_path);
@@ -659,7 +750,7 @@ async fn main() {
     }
 
     // 合并配置：命令行参数优先级高于配置文件
-    
+
     let snapshot_dir = args.snapshot_dir.or(config.snapshot_dir);
     let full_image = args.full_image.clone();
     let total_memory = args.total_memory.or(config.total_memory);
@@ -672,7 +763,7 @@ async fn main() {
     let wal_log_prealloc_size = config.wal.as_ref().and_then(|w| w.log_prealloc_size);
     let wal_log_segment_size = config.wal.as_ref().and_then(|w| w.log_segment_size);
     let wal_retained_checkpoints = config.wal.as_ref().and_then(|w| w.retained_checkpoints);
-    
+
     let low_power_mode_supported = args
         .low_power_mode_supported
         .or(config.low_power_mode_supported);
@@ -747,12 +838,12 @@ async fn main() {
     // 设置debug模式：命令行参数优先级高于配置文件
     let debug_mode = args.debug || config.debug.unwrap_or(false);
     set_debug_mode(debug_mode);
-    
+
     if debug_mode {
         let message = "Debug mode enabled";
         println!("{}", message);
     }
-    
+
     // 初始化日志文件
     let log_file_path = log_path.clone().unwrap_or("./logs".to_string());
     if let Err(err) = set_log_file(&log_file_path) {
@@ -772,7 +863,8 @@ async fn main() {
     let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = (Vec::new(), Vec::new());
 
     // 创建默认内存分配器
-    static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator = remdb::config::DefaultMemoryAllocator;
+    static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator =
+        remdb::config::DefaultMemoryAllocator;
 
     // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
     let static_tables = Box::leak(Box::new(tables));
@@ -797,11 +889,12 @@ async fn main() {
     };
 
     // 处理主节点地址，转换为&'static str
-    let master_address = 
+    let master_address =
         ha_master_address.map(|addr| Box::leak(addr.into_boxed_str()) as &'static str);
 
     // 处理节点ID，转换为u32类型
-    let node_id = ha_node_id.as_deref()
+    let node_id = ha_node_id
+        .as_deref()
         .and_then(|id| id.parse::<u32>().ok())
         .unwrap_or(1); // 默认节点ID为1
 
@@ -810,14 +903,15 @@ async fn main() {
         tables: static_tables,
         total_memory: total_memory.unwrap_or(1024 * 1024 * 100), // 默认100MB
         low_power_mode_supported: low_power_mode_supported.unwrap_or(true), // 默认支持低功耗模式
-        low_power_max_records: low_power_max_records, // 使用配置文件或命令行参数中的值
+        low_power_max_records: low_power_max_records,            // 使用配置文件或命令行参数中的值
         default_max_records: default_max_records.unwrap_or(10000), // 使用配置文件或命令行参数中的默认值，否则使用10000
         memory_allocator: unsafe {
             &*(&raw const DEFAULT_ALLOCATOR as *const _)
                 as &'static dyn remdb::config::MemoryAllocator
         },
         wal_config: remdb::config::WALConfig {
-            log_path: Box::leak(log_path.unwrap_or("./wal".to_string()).into_boxed_str()) as &'static str,
+            log_path: Box::leak(log_path.unwrap_or("./wal".to_string()).into_boxed_str())
+                as &'static str,
             log_mode: match wal_log_mode.as_deref() {
                 Some("sync") | Some("Sync") => remdb::config::LogMode::Sync,
                 _ => remdb::config::LogMode::Async,
@@ -829,7 +923,7 @@ async fn main() {
             retained_checkpoints: wal_retained_checkpoints.unwrap_or(3),
         },
         time_series_defaults: remdb::TimeSeriesConfig::DEFAULT, // 时序数据默认配置
-        pubsub_config: None, // PubSub配置，默认不使用
+        pubsub_config: None,                                    // PubSub配置，默认不使用
         ha_config: Some(remdb::ha::HAConfig {
             node_id,
             ha_role,
@@ -840,13 +934,13 @@ async fn main() {
             master_address,
             master_port: ha_master_port,
             replication_port: ha_replication_port.unwrap_or(6668), // 默认复制端口
- // 默认心跳端口
-        })
+                                                                   // 默认心跳端口
+        }),
     }));
 
     // 初始化全局内存分配器，这是关键的一步！
     let total_memory = config.total_memory;
-    
+
     // 初始化HA manager（在内存分配器和数据库初始化之前，因为HA可能依赖于特定的初始化顺序）
     if ha_enabled {
         log_println!("Initializing HA manager...");
@@ -855,7 +949,7 @@ async fn main() {
             Err(e) => log_eprintln!("Error: Failed to initialize HA manager: {}", e),
         }
     }
-    
+
     // 使用Vec<u8>在堆上分配内存，避免栈溢出
     let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
     let memory_ptr = memory_vec.as_ptr() as *mut u8;
@@ -902,7 +996,8 @@ async fn main() {
                 // 如果WAL恢复失败，尝试从快照目录加载
                 if let Some(snapshot_dir) = &snapshot_dir {
                     log_println!("Falling back to snapshot directory: {}", snapshot_dir);
-                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
+                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir)
+                    {
                         log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
                     } else {
                         log_println!("Snapshot loaded successfully");
@@ -924,13 +1019,19 @@ async fn main() {
 
     // 执行DDL文件中的INSERT语句
     if !insert_statements.is_empty() {
-        log_println!("Executing {} INSERT statements from DDL file", insert_statements.len());
+        log_println!(
+            "Executing {} INSERT statements from DDL file",
+            insert_statements.len()
+        );
         for stmt in insert_statements {
             log_println!("Executing: {}", stmt);
             match sql_engine::execute_extended_sql(&mut db, &stmt) {
                 Ok(result) => {
-                    log_println!("✓ INSERT executed successfully, affected rows: {}", result.affected_rows);
-                },
+                    log_println!(
+                        "✓ INSERT executed successfully, affected rows: {}",
+                        result.affected_rows
+                    );
+                }
                 Err(err) => {
                     log_eprintln!("Error: Failed to execute INSERT statement: {}", err);
                     log_eprintln!("Statement: {}", stmt);
@@ -938,14 +1039,16 @@ async fn main() {
             }
         }
     }
-    
+
     // 测试healthcheck命令
     if args.test_export {
         log_println!("\n=== Testing HEALTHCHECK command ===");
         match sql_engine::execute_extended_sql(&mut db, "healthcheck") {
             Ok(result) => {
                 log_println!("\nHealthcheck result:");
-                log_println!("+--------------------+----------+------------------------------------------------------------------+");
+                log_println!(
+                    "+--------------------+----------+------------------------------------------------------------------+"
+                );
                 for (i, row) in result.rows.iter().enumerate() {
                     if i == 0 {
                         // 打印列名
@@ -955,7 +1058,9 @@ async fn main() {
                             line.push('|');
                         }
                         log_println!("{}", line);
-                        log_println!("+--------------------+----------+------------------------------------------------------------------+");
+                        log_println!(
+                            "+--------------------+----------+------------------------------------------------------------------+"
+                        );
                     }
                     let mut line = String::from("|");
                     for (j, value) in row.iter().enumerate() {
@@ -969,8 +1074,10 @@ async fn main() {
                     }
                     log_println!("{}", line);
                 }
-                log_println!("+--------------------+----------+------------------------------------------------------------------+");
-            },
+                log_println!(
+                    "+--------------------+----------+------------------------------------------------------------------+"
+                );
+            }
             Err(err) => {
                 log_eprintln!("Error: Failed to execute healthcheck: {}", err);
             }
@@ -980,9 +1087,9 @@ async fn main() {
     // 将数据库实例泄漏到静态内存，以获取'static生命周期
     let db_static = Box::leak(Box::new(db));
     let db_mut_ref: &'static mut RemDb = db_static;
-    
+
     // 将数据库实例包装在Arc<Mutex>中，以便在多线程环境中安全访问
-    let db_arc = Arc::new(TokioMutex::new(db_mut_ref));
+    let db_arc = Arc::new(Mutex::new(db_mut_ref));
 
     // 如果配置了端口，则使用配置的端口，否则使用默认端口6666
     let actual_jdbc_port = jdbc_port.unwrap_or(6666);
@@ -1012,7 +1119,9 @@ async fn main() {
 
         log_println!(
             "Starting JDBC server on port {} with max connections {} and timeout {} seconds",
-            actual_jdbc_port, max_conns, jdbc_timeout
+            actual_jdbc_port,
+            max_conns,
+            jdbc_timeout
         );
         log_println!(
             "JDBC authentication: {}",
@@ -1032,28 +1141,34 @@ async fn main() {
     // 添加定时器线程，定期检查是否需要创建checkpoint
     let checkpoint_interval = wal_checkpoint_interval_ms.unwrap_or(30000);
     if checkpoint_interval > 0 {
-        log_println!("Starting checkpoint timer with interval {} ms", checkpoint_interval);
-        
+        log_println!(
+            "Starting checkpoint timer with interval {} ms",
+            checkpoint_interval
+        );
+
         // 在后台启动checkpoint定时器
         tokio::spawn(async move {
             let interval = tokio::time::Duration::from_millis(checkpoint_interval as u64);
             let mut timer = tokio::time::interval(interval);
-            
+
             loop {
                 timer.tick().await;
-                
+
                 // 尝试获取LogManager并检查是否需要创建checkpoint
                 let log_manager_opt = unsafe { remdb::transaction::get_log_manager() };
                 if let Some(log_manager) = log_manager_opt {
                     // 记录开始时间
                     let start = std::time::Instant::now();
-                    
+
                     // 调用检查函数，记录结果
                     match unsafe { log_manager.check_flush_and_checkpoint() } {
                         Ok(()) => {
                             let duration = start.elapsed();
-                            println!("[Checkpoint Timer] Checkpoint executed successfully in {:?}", duration);
-                        },
+                            println!(
+                                "[Checkpoint Timer] Checkpoint executed successfully in {:?}",
+                                duration
+                            );
+                        }
                         Err(e) => {
                             println!("[Checkpoint Timer] Failed to execute checkpoint: {:?}", e);
                         }
@@ -1064,7 +1179,7 @@ async fn main() {
             }
         });
     }
-    
+
     // 添加定时器线程，定期创建快照
     if let Some(interval_secs) = snapshot_interval {
         if let Some(snap_type) = &snapshot_type {
@@ -1073,49 +1188,63 @@ async fn main() {
                 // 克隆快照目录和其他配置，确保它们的生命周期足够长
                 let snapshot_dir_clone = snapshot_dir.clone();
                 let max_snapshots = max_incremental_snapshots.unwrap_or(10);
-                
-                log_println!("Starting snapshot timer with interval {} seconds, type: {}", interval_secs, snap_type);
-                
+
+                log_println!(
+                    "Starting snapshot timer with interval {} seconds, type: {}",
+                    interval_secs,
+                    snap_type
+                );
+
                 // 在后台启动快照定时器
                 tokio::spawn(async move {
                     let interval = tokio::time::Duration::from_secs(interval_secs);
                     let mut timer = tokio::time::interval(interval);
-                    
+
                     loop {
                         timer.tick().await;
-                        
+
                         // 尝试获取全局数据库实例
                         let db_opt = unsafe { remdb::get_global_db() };
                         if let Some(mut db_guard) = db_opt {
                             let db = &mut *db_guard;
-                            
+
                             // 记录开始时间
                             let start = std::time::Instant::now();
-                            
+
                             // 根据配置的快照类型创建快照
                             let result = if let Some(dir) = &snapshot_dir_clone {
                                 if snap_type == "full" {
                                     snapshot_loader::save_full_snapshot_to_dir(db, dir)
                                 } else {
-                                    let res = snapshot_loader::save_incremental_snapshot_to_dir(db, dir);
+                                    let res =
+                                        snapshot_loader::save_incremental_snapshot_to_dir(db, dir);
                                     // 如果是增量快照，清理旧的快照
                                     if res.is_ok() {
-                                        let _ = snapshot_loader::cleanup_old_snapshots(dir, max_snapshots);
+                                        let _ = snapshot_loader::cleanup_old_snapshots(
+                                            dir,
+                                            max_snapshots,
+                                        );
                                     }
                                     res
                                 }
                             } else {
                                 Err(remdb::RemDbError::FileIoError)
                             };
-                            
+
                             // 记录结果
                             match result {
                                 Ok(()) => {
                                     let duration = start.elapsed();
-                                    println!("[Snapshot Timer] {} snapshot executed successfully in {:?}", snap_type, duration);
-                                },
+                                    println!(
+                                        "[Snapshot Timer] {} snapshot executed successfully in {:?}",
+                                        snap_type, duration
+                                    );
+                                }
                                 Err(e) => {
-                                    println!("[Snapshot Timer] Failed to execute {} snapshot: {:?}", snap_type, e);
+                                    println!(
+                                        "[Snapshot Timer] Failed to execute {} snapshot: {:?}",
+                                        snap_type, e
+                                    );
                                 }
                             }
                         } else {
@@ -1126,7 +1255,7 @@ async fn main() {
             }
         }
     }
-    
+
     // 初始化并启动PubSub系统（如果启用）
     if pubsub_enabled.unwrap_or(false) {
         use remdb::pubsub::{PubSubConfig, UdpMode, init as pubsub_init};
@@ -1177,7 +1306,7 @@ async fn main() {
     if !args.non_interactive {
         // 只在非交互式模式下启动CLI，JDBC模式下不启动CLI
         if !should_start_jdbc {
-            let mut db_lock = db_arc.lock().await;
+            let mut db_lock = db_arc.lock().unwrap();
             cli::run_cli(&mut db_lock);
         } else {
             log_println!(

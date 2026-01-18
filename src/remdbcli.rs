@@ -1,9 +1,14 @@
 use clap::Parser;
-use std::io::{self, BufRead, BufReader, Write};
-use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use ctrlc;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+// 添加protobuf相关导入
+use prost::Message;
+use remdb_server::proto::*;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -34,51 +39,85 @@ fn main() {
     // 创建退出标志
     let should_exit = Arc::new(AtomicBool::new(false));
     let should_exit_clone = should_exit.clone();
-    
+
     // 设置Ctrl+C处理
     ctrlc::set_handler(move || {
         should_exit_clone.store(true, Ordering::SeqCst);
-    }).expect("Failed to set Ctrl+C handler");
-    
+    })
+    .expect("Failed to set Ctrl+C handler");
+
     let cli = Cli::parse();
 
     // 连接到JDBC服务器
     let addr = format!("{}:{}", cli.host, cli.port);
-    let mut stream = match TcpStream::connect(&addr) {
-        Ok(stream) => stream,
+    let socket_addr = addr.parse().expect("Invalid address format");
+    let mut stream = match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5)) {
+        Ok(stream) => {
+            // 设置读写超时
+            if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
+                eprintln!("Failed to set read timeout: {}", e);
+                std::process::exit(1);
+            }
+            if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
+                eprintln!("Failed to set write timeout: {}", e);
+                std::process::exit(1);
+            }
+
+            // 禁用Nagle算法，减少延迟
+            stream.set_nodelay(true).unwrap();
+
+            stream
+        }
         Err(e) => {
             eprintln!("Failed to connect to JDBC server at {}: {}", addr, e);
             std::process::exit(1);
         }
     };
 
-    // 处理认证
-    if let Some(username) = &cli.username {
-        if let Some(password) = &cli.password {
-            let auth_command = format!("AUTH|{}|{}", username, password);
-            if let Err(e) = writeln!(stream, "{}", auth_command) {
-                eprintln!("Failed to send auth command: {}", e);
-                std::process::exit(1);
-            }
-            stream.flush().unwrap();
+    // 初始化request_id计数器
+    let mut request_id = 1;
 
-            let mut response = String::new();
-            let mut reader = BufReader::new(&mut stream);
-            if let Err(e) = reader.read_line(&mut response) {
-                eprintln!("Failed to read auth response: {}", e);
-                std::process::exit(1);
-            }
+    // 处理认证 - 暂时简化，后续完善
+    let connection_request = ConnectionRequest {
+        username: cli.username.clone().unwrap_or("root".to_string()),
+        password: cli.password.clone().unwrap_or("".to_string()),
+        database: "default".to_string(),
+        fetch_size: 100,
+        auto_commit: true,
+    };
 
-            if response.starts_with("ERROR|") {
-                eprintln!("Authentication failed: {}", &response[6..].trim());
+    let jdbc_request = JdbcRequest {
+        request_id,
+        request: Some(jdbc_request::Request::Connection(connection_request)),
+    };
+
+    println!("Sending connection request...");
+    if let Err(e) = send_jdbc_request(&mut stream, &jdbc_request) {
+        eprintln!("Failed to send connection request: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("Reading connection response...");
+    match read_jdbc_response(&mut stream) {
+        Ok(response) => {
+            println!("Connection response received, status: {}", response.status);
+            if response.status != 0 {
+                // 0 是 Status::OK 的值
+                eprintln!("Authentication failed: {}", response.error_message);
                 std::process::exit(1);
             }
         }
+        Err(e) => {
+            eprintln!("Failed to read connection response: {}", e);
+            std::process::exit(1);
+        }
     }
+
+    request_id += 1;
 
     // 如果提供了sql参数，执行单次命令并退出
     if let Some(sql) = cli.sql {
-        execute_sql(&mut stream, &sql);
+        execute_sql(&mut stream, &sql, &mut request_id);
         return;
     }
 
@@ -90,26 +129,26 @@ fn main() {
 
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
-    
+
     loop {
         // 检查退出标志
         if should_exit.load(Ordering::SeqCst) {
             println!("\nReceived interrupt signal, exiting...");
             break;
         }
-        
+
         print!("remdbcli> ");
         io::stdout().flush().unwrap();
 
         let mut line = String::new();
         let result = reader.read_line(&mut line);
-        
+
         match result {
             Ok(0) => {
                 // EOF encountered, exit gracefully
                 println!("\nEOF encountered, exiting...");
                 break;
-            },
+            }
             Ok(_) => {
                 let original_line = line.trim();
                 let command = original_line.to_lowercase();
@@ -138,39 +177,39 @@ fn main() {
                     match std::fs::read_to_string(file_path) {
                         Ok(content) => {
                             println!("Executing commands from file: {}", file_path);
-                            
+
                             // 按行处理文件内容
                             let mut current_statement = String::new();
                             for line in content.lines() {
                                 let trimmed_line = line.trim();
-                                
+
                                 // 跳过空行和注释行
                                 if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
                                     continue;
                                 }
-                                
+
                                 current_statement.push_str(trimmed_line);
                                 current_statement.push(' ');
-                                
+
                                 // 如果语句以分号结束，执行它
                                 if trimmed_line.ends_with(';') {
                                     // 移除分号和多余空格
                                     let statement = current_statement.trim_end_matches(';').trim();
                                     if !statement.is_empty() {
                                         // 执行单个语句
-                                        execute_sql(&mut stream, statement);
+                                        execute_sql(&mut stream, statement, &mut request_id);
                                     }
                                     // 重置当前语句
                                     current_statement.clear();
                                 }
                             }
-                            
+
                             // 执行最后一个没有分号的语句
                             let statement = current_statement.trim();
                             if !statement.is_empty() {
-                                execute_sql(&mut stream, statement);
+                                execute_sql(&mut stream, statement, &mut request_id);
                             }
-                            
+
                             println!("✓ Successfully executed commands from file: {}", file_path);
                         }
                         Err(err) => {
@@ -180,13 +219,13 @@ fn main() {
                     continue;
                 }
 
-                execute_sql(&mut stream, original_line);
-            },
+                execute_sql(&mut stream, original_line, &mut request_id);
+            }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 // 处理Ctrl+C信号，退出循环
                 println!("\nReceived interrupt signal, exiting...");
                 break;
-            },
+            }
             Err(e) => {
                 eprintln!("Error reading input: {}", e);
                 break;
@@ -194,100 +233,116 @@ fn main() {
         }
     }
 
-    // 关闭连接，优雅处理可能的错误
-    if let Err(e) = writeln!(stream, "CLOSE") {
-        eprintln!("Failed to send close command: {}", e);
-    } else if let Err(e) = stream.flush() {
-        eprintln!("Failed to flush close command: {}", e);
-    }
+    // 关闭连接 - 暂时简化，后续完善
+    // if let Err(e) = writeln!(stream, "CLOSE") {
+    //     eprintln!("Failed to send close command: {}", e);
+    // } else if let Err(e) = stream.flush() {
+    //     eprintln!("Failed to flush close command: {}", e);
+    // }
 }
 
-fn execute_sql(stream: &mut TcpStream, sql: &str) {
-    // 构建EXECUTE命令
-    let execute_command = format!("EXECUTE|{}", sql);
+// 发送JDBC请求的辅助函数
+fn send_jdbc_request(stream: &mut TcpStream, request: &JdbcRequest) -> std::io::Result<()> {
+    // 序列化请求
+    let mut buf = Vec::with_capacity(request.encoded_len());
+    request.encode(&mut buf)?;
 
-    // 发送命令
-    if let Err(e) = writeln!(stream, "{}", execute_command) {
+    // 发送请求长度（4字节大端）
+    let len = buf.len() as u32;
+    stream.write_all(&len.to_be_bytes())?;
+
+    // 发送请求数据
+    stream.write_all(&buf)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+// 读取JDBC响应的辅助函数
+fn read_jdbc_response(stream: &mut TcpStream) -> std::io::Result<JdbcResponse> {
+    // 读取响应长度（4字节大端）
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+
+    // 读取响应数据
+    let mut data_buf = vec![0u8; len];
+    stream.read_exact(&mut data_buf)?;
+
+    // 反序列化响应
+    let response = JdbcResponse::decode(&*data_buf)?;
+
+    Ok(response)
+}
+
+fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64) {
+    // 创建查询请求
+    let query_request = QueryRequest {
+        sql: sql.to_string(),
+        parameters: Vec::new(),
+        fetch_size: 100,
+        use_cursor: false,
+    };
+
+    // 创建JDBC请求
+    let jdbc_request = JdbcRequest {
+        request_id: *request_id,
+        request: Some(jdbc_request::Request::Query(query_request)),
+    };
+
+    // 发送请求
+    if let Err(e) = send_jdbc_request(stream, &jdbc_request) {
         eprintln!("Failed to send SQL command: {}", e);
         return;
     }
-    stream.flush().unwrap();
 
-    // 读取JDBC服务器响应
-    let mut response = String::new();
-    let mut reader = BufReader::new(stream);
-    if let Err(e) = reader.read_line(&mut response) {
-        eprintln!("Failed to read SQL response: {}", e);
-        return;
-    }
-
-    // 处理响应
-    process_response(&response);
-}
-
-fn process_response(response: &str) {
-    let trimmed = response.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-
-    if trimmed.starts_with("ERROR|") {
-        // 处理错误响应，确保不会越界
-        if trimmed.len() > 6 {
-            eprintln!("Error: {}", &trimmed[6..]);
-        } else {
-            eprintln!("Error: Invalid error response format");
+    // 读取响应
+    match read_jdbc_response(stream) {
+        Ok(response) => {
+            process_jdbc_response(&response);
         }
-        return;
-    }
-
-    if trimmed.starts_with("OK|") {
-        let parts: Vec<&str> = trimmed[3..].split('|').collect();
-        if parts.len() < 1 {
-            eprintln!("Invalid OK response format");
+        Err(e) => {
+            eprintln!("Failed to read SQL response: {}", e);
             return;
         }
-
-        let affected_rows = parts[0].parse::<usize>().unwrap_or(0);
-
-        // 检查parts.len()是否足够，避免数组越界
-        if parts.len() >= 2 && parts[1] != "0" {
-            // 有结果集
-            if parts.len() >= 4 {
-                let columns_count = parts[1].parse::<usize>().unwrap_or(0);
-                let columns = parts[2].split(',').collect::<Vec<&str>>();
-                let rows_str = parts[3];
-
-                // 检查列数是否匹配
-                if columns.len() != columns_count {
-                    eprintln!(
-                        "Column count mismatch: expected {}, got {}",
-                        columns_count,
-                        columns.len()
-                    );
-                    return;
-                }
-
-                let rows = if rows_str.is_empty() {
-                    Vec::new()
-                } else {
-                    rows_str
-                        .split(';')
-                        .map(|row| row.split(',').collect::<Vec<&str>>())
-                        .collect::<Vec<Vec<&str>>>()
-                };
-
-                // 格式化输出结果集
-                format_result_set(columns, rows);
-            }
-        } else {
-            // 没有结果集，只显示受影响的行数
-            println!("Affected {} row(s)", affected_rows);
-        }
-        return;
     }
 
-    eprintln!("Unknown response format: {}", trimmed);
+    // 更新request_id
+    *request_id += 1;
+}
+
+fn process_jdbc_response(response: &JdbcResponse) {
+    // 0 是 Status::OK 的值
+    if response.status == 0 {
+        // 处理成功响应
+        match &response.response {
+            Some(jdbc_response::Response::ResultSet(result_set)) => {
+                // 处理结果集
+                println!("Debug: ResultSet columns: {:?}", result_set.columns);
+                println!("Debug: ResultSet rows: {:?}", result_set.rows);
+                println!("Debug: ResultSet row count: {}", result_set.row_count);
+                format_result_set_proto(result_set);
+            }
+            Some(jdbc_response::Response::Update(update)) => {
+                // 处理更新响应
+                println!("Affected {} row(s)", update.affected_rows);
+                if update.last_insert_id > 0 {
+                    println!("Last insert ID: {}", update.last_insert_id);
+                }
+            }
+            Some(jdbc_response::Response::Transaction(_)) => {
+                // 处理事务响应
+                println!("Transaction completed successfully");
+            }
+            _ => {
+                // 其他响应类型
+                println!("Command executed successfully");
+            }
+        }
+    } else {
+        // 处理错误响应
+        eprintln!("Error: {}", response.error_message);
+    }
 }
 
 fn format_result_set(columns: Vec<&str>, rows: Vec<Vec<&str>>) {
@@ -344,6 +399,151 @@ fn format_result_set(columns: Vec<&str>, rows: Vec<Vec<&str>>) {
 
     output.push_str(&separator);
     output.push_str("\n");
+
+    println!("{}", output);
+}
+
+// 处理值类型，转换为字符串
+fn value_to_string(value: &Value) -> String {
+    match &value.value {
+        Some(value::Value::BooleanValue(v)) => v.to_string(),
+        Some(value::Value::Int32Value(v)) => v.to_string(),
+        Some(value::Value::Int64Value(v)) => v.to_string(),
+        Some(value::Value::FloatValue(v)) => v.to_string(),
+        Some(value::Value::DoubleValue(v)) => v.to_string(),
+        Some(value::Value::StringValue(v)) => v.clone(),
+        Some(value::Value::BytesValue(v)) => format!("bytes[{:?}]", v),
+        Some(value::Value::Uint64Value(v)) => v.to_string(),
+        Some(value::Value::Sint64Value(v)) => v.to_string(),
+        Some(value::Value::Fixed32Value(v)) => v.to_string(),
+        Some(value::Value::Fixed64Value(v)) => v.to_string(),
+        Some(value::Value::Sfixed32Value(v)) => v.to_string(),
+        Some(value::Value::Sfixed64Value(v)) => v.to_string(),
+        Some(value::Value::DateValue(v)) => format!("date[{:?}]", v),
+        Some(value::Value::TimeValue(v)) => format!("time[{:?}]", v),
+        Some(value::Value::TimestampValue(v)) => format!("timestamp[{:?}]", v),
+        Some(value::Value::NullValue(_)) => "NULL".to_string(),
+        None => "NULL".to_string(),
+    }
+}
+
+// 处理protobuf格式的结果集
+fn format_result_set_proto(result_set: &ResultSetResponse) {
+    if result_set.columns.is_empty() {
+        println!("Empty result set");
+        return;
+    }
+
+    // 获取列名
+    let columns: Vec<&str> = result_set.columns.iter().map(|c| &*c.name).collect();
+
+    // 转换行数据为字符串格式
+    let rows: Vec<Vec<String>> = result_set
+        .rows
+        .iter()
+        .map(|row| {
+            row.values
+                .iter()
+                .map(|value| value_to_string(value))
+                .collect()
+        })
+        .collect();
+
+    // 如果没有行数据，只显示列名
+    if rows.is_empty() {
+        format_empty_result_set(columns);
+        return;
+    }
+
+    // 计算每列的最大宽度
+    let mut col_widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            let cell_str: &String = cell;
+            if i < col_widths.len() && cell_str.len() > col_widths[i] {
+                col_widths[i] = cell_str.len();
+            }
+        }
+    }
+
+    // 构建分隔线
+    let separator: String = col_widths
+        .iter()
+        .map(|w| format!("+{}", "-".repeat(w + 2)))
+        .collect::<Vec<_>>()
+        .join("")
+        + "|";
+
+    // 构建表头
+    let mut output = String::new();
+    output.push_str(&separator);
+    output.push_str("\n");
+
+    for (i, col) in columns.iter().enumerate() {
+        if i < col_widths.len() {
+            output.push_str(&format!("| {:<width$} ", col, width = col_widths[i]));
+        }
+    }
+    output.push_str("|");
+    output.push_str("\n");
+
+    output.push_str(&separator);
+    output.push_str("\n");
+
+    // 构建行
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            let cell_str: &String = cell;
+            if i < col_widths.len() {
+                output.push_str(&format!("| {:<width$} ", cell_str, width = col_widths[i]));
+            }
+        }
+        output.push_str("|");
+        output.push_str("\n");
+    }
+
+    output.push_str(&separator);
+    output.push_str("\n");
+    output.push_str(&format!("{} rows in set\n", result_set.row_count));
+
+    println!("{}", output);
+}
+
+// 处理空结果集的情况
+fn format_empty_result_set(columns: Vec<&str>) {
+    if columns.is_empty() {
+        println!("Empty result set");
+        return;
+    }
+
+    // 计算每列的最大宽度
+    let col_widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+
+    // 构建分隔线
+    let separator: String = col_widths
+        .iter()
+        .map(|w| format!("+{}", "-".repeat(w + 2)))
+        .collect::<Vec<_>>()
+        .join("")
+        + "|";
+
+    // 构建表头
+    let mut output = String::new();
+    output.push_str(&separator);
+    output.push_str("\n");
+
+    for (i, col) in columns.iter().enumerate() {
+        if i < col_widths.len() {
+            output.push_str(&format!("| {:<width$} ", col, width = col_widths[i]));
+        }
+    }
+    output.push_str("|");
+    output.push_str("\n");
+
+    output.push_str(&separator);
+    output.push_str("\n");
+    output.push_str(&format!("0 rows in set\n"));
 
     println!("{}", output);
 }

@@ -30,7 +30,9 @@ struct DdlIndex {
 }
 
 /// 编译DDL文件，生成表定义和INSERT语句
-pub fn compile_ddl_file(file_path: &str) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
+pub fn compile_ddl_file(
+    file_path: &str,
+) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
     // 读取DDL文件内容
     let content = std::fs::read_to_string(file_path)?;
 
@@ -39,7 +41,9 @@ pub fn compile_ddl_file(file_path: &str) -> std::result::Result<(Vec<TableDef>, 
 }
 
 /// 解析DDL内容，生成表定义和INSERT语句
-pub fn parse_ddl_content(content: &str) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
+pub fn parse_ddl_content(
+    content: &str,
+) -> std::result::Result<(Vec<TableDef>, Vec<String>), DdlError> {
     let mut tables = Vec::new();
     let mut insert_statements = Vec::new();
     let mut table_id = 0;
@@ -91,8 +95,8 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<(Vec<TableDef>, V
 
             // 查找右括号（使用rfind找到最后一个右括号，避免被VARCHAR(50)中的括号干扰）
             let right_paren = columns_part.rfind(')').ok_or(DdlError::Parsing(format!(
-                "Invalid CREATE TABLE syntax: missing ')'")
-            ))?;
+                "Invalid CREATE TABLE syntax: missing ')'"
+            )))?;
 
             // 提取括号内的列定义
             let columns_content = &columns_part[1..right_paren];
@@ -101,17 +105,17 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<(Vec<TableDef>, V
             let mut columns = Vec::new();
             let mut bracket_depth = 0;
             let mut current_column = String::new();
-            
+
             for c in columns_content.chars() {
                 match c {
                     '(' => {
                         bracket_depth += 1;
                         current_column.push(c);
-                    },
+                    }
                     ')' => {
                         bracket_depth -= 1;
                         current_column.push(c);
-                    },
+                    }
                     ',' => {
                         if bracket_depth == 0 {
                             // 仅当括号深度为0时才分割列
@@ -125,13 +129,13 @@ pub fn parse_ddl_content(content: &str) -> std::result::Result<(Vec<TableDef>, V
                             // 括号内的逗号，保留
                             current_column.push(c);
                         }
-                    },
+                    }
                     _ => {
                         current_column.push(c);
                     }
                 }
             }
-            
+
             // 处理最后一个列
             let column_str = current_column.trim();
             if !column_str.is_empty() {
@@ -276,27 +280,49 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     if let Some(default_pos) = constraints_lower.find("default") {
         // 提取默认值部分
         let default_part = &constraints_part[default_pos + 7..].trim();
-        
+
         // 移除可能的逗号
         let default_str = default_part.trim_end_matches(',');
-        
+
         // 处理不同数据类型的默认值
         use remdb::types::Value;
         let parsed_default = match data_type {
-            DataType::UInt8 => Some(Value { u8: default_str.parse().unwrap_or(0) }),
-            DataType::UInt16 => Some(Value { u16: default_str.parse().unwrap_or(0) }),
-            DataType::UInt32 => Some(Value { u32: default_str.parse().unwrap_or(0) }),
-            DataType::UInt64 => Some(Value { u64: default_str.parse().unwrap_or(0) }),
-            DataType::Int8 => Some(Value { i8: default_str.parse().unwrap_or(0) }),
-            DataType::Int16 => Some(Value { i16: default_str.parse().unwrap_or(0) }),
-            DataType::Int32 => Some(Value { i32: default_str.parse().unwrap_or(0) }),
-            DataType::Int64 => Some(Value { i64: default_str.parse().unwrap_or(0) }),
-            DataType::Float32 => Some(Value { float32: default_str.parse().unwrap_or(0.0) }),
-            DataType::Float64 => Some(Value { float64: default_str.parse().unwrap_or(0.0) }),
+            DataType::UInt8 => Some(Value {
+                u8: default_str.parse().unwrap_or(0),
+            }),
+            DataType::UInt16 => Some(Value {
+                u16: default_str.parse().unwrap_or(0),
+            }),
+            DataType::UInt32 => Some(Value {
+                u32: default_str.parse().unwrap_or(0),
+            }),
+            DataType::UInt64 => Some(Value {
+                u64: default_str.parse().unwrap_or(0),
+            }),
+            DataType::Int8 => Some(Value {
+                i8: default_str.parse().unwrap_or(0),
+            }),
+            DataType::Int16 => Some(Value {
+                i16: default_str.parse().unwrap_or(0),
+            }),
+            DataType::Int32 => Some(Value {
+                i32: default_str.parse().unwrap_or(0),
+            }),
+            DataType::Int64 => Some(Value {
+                i64: default_str.parse().unwrap_or(0),
+            }),
+            DataType::Float32 => Some(Value {
+                float32: default_str.parse().unwrap_or(0.0),
+            }),
+            DataType::Float64 => Some(Value {
+                float64: default_str.parse().unwrap_or(0.0),
+            }),
             DataType::Bool => {
                 let lower = default_str.to_lowercase();
-                Some(Value { bool: lower == "true" || lower == "1" })
-            },
+                Some(Value {
+                    bool: lower == "true" || lower == "1",
+                })
+            }
             DataType::String => {
                 // 移除引号
                 let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
@@ -304,26 +330,32 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
                 let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
                 buf[..len].copy_from_slice(str_val.as_bytes());
                 Some(Value { string: buf })
-            },
+            }
             DataType::Timestamp | DataType::TimestampTZ => {
                 // 处理时间戳默认值
                 if default_str.eq_ignore_ascii_case("current_timestamp") {
                     // 使用当前时间戳
                     let now = remdb::types::time_utils::now_micros() as i64;
-                    Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                    Some(Value {
+                        time: remdb::types::db_timestamp::new(now, 0, 6, 0),
+                    })
                 } else {
                     // 尝试解析为数值时间戳
                     let ts = default_str.parse().unwrap_or(0);
-                    Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                    Some(Value {
+                        time: remdb::types::db_timestamp::new(ts, 0, 6, 0),
+                    })
                 }
-            },
+            }
             DataType::Interval => {
                 // 解析时间间隔
                 let interval_val = default_str.parse().unwrap_or(0);
-                Some(Value { interval: remdb::types::db_interval::new(interval_val, 6, 0) })
-            },
+                Some(Value {
+                    interval: remdb::types::db_interval::new(interval_val, 6, 0),
+                })
+            }
         };
-        
+
         default_value = parsed_default;
     }
 
@@ -433,15 +465,24 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
     if typ_lower.starts_with("timestamp") {
         // 支持带时区的TIMESTAMP（TIMESTAMPTZ或TIMESTAMP WITH TIME ZONE）
         if typ_lower.contains("with time zone") || typ_lower.contains("timestamptz") {
-            return Ok((DataType::TimestampTZ, core::mem::size_of::<remdb::types::db_timestamp>()));
+            return Ok((
+                DataType::TimestampTZ,
+                core::mem::size_of::<remdb::types::db_timestamp>(),
+            ));
         }
         // 普通TIMESTAMP类型
-        return Ok((DataType::Timestamp, core::mem::size_of::<remdb::types::db_timestamp>()));
+        return Ok((
+            DataType::Timestamp,
+            core::mem::size_of::<remdb::types::db_timestamp>(),
+        ));
     }
 
     // 处理时间间隔类型
     if typ_lower.starts_with("interval") {
-        return Ok((DataType::Interval, core::mem::size_of::<remdb::types::db_interval>()));
+        return Ok((
+            DataType::Interval,
+            core::mem::size_of::<remdb::types::db_interval>(),
+        ));
     }
 
     // 不支持的数据类型
@@ -512,7 +553,12 @@ mod tests {
         match parse_ddl_content(create_table_sql) {
             Ok(tables) => {
                 // Verify that one table was created
-                assert_eq!(tables.0.len(), 1, "Expected 1 table, got {}", tables.0.len());
+                assert_eq!(
+                    tables.0.len(),
+                    1,
+                    "Expected 1 table, got {}",
+                    tables.0.len()
+                );
 
                 let table = &tables.0[0];
                 assert_eq!(

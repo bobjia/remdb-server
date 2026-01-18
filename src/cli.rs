@@ -72,10 +72,16 @@ pub fn run_cli(db: &mut RemDb) {
                                 Ok(result_set) => {
                                     let formatted = format_result_set(&result_set);
                                     println!("{}", formatted);
-                                    println!("✓ Successfully executed commands from file: {}", file_path);
+                                    println!(
+                                        "✓ Successfully executed commands from file: {}",
+                                        file_path
+                                    );
                                 }
                                 Err(err) => {
-                                    eprintln!("Error: Failed to execute commands from file {}: {:?}", file_path, err);
+                                    eprintln!(
+                                        "Error: Failed to execute commands from file {}: {:?}",
+                                        file_path, err
+                                    );
                                 }
                             }
                         }

@@ -18,11 +18,14 @@ pub fn load_snapshot_from_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
         if file_path.is_file() {
             let file_name = file_path.file_name().unwrap().to_string_lossy().to_string();
             let full_path = file_path.to_string_lossy().to_string();
-            
+
             // 解析文件名，提取类型和时间戳
             if file_name.starts_with("full_") && file_name.ends_with(".remd") {
                 // 全量快照：full_timestamp.remd
-                if let Some(ts_str) = file_name.strip_prefix("full_").and_then(|s| s.strip_suffix(".remd")) {
+                if let Some(ts_str) = file_name
+                    .strip_prefix("full_")
+                    .and_then(|s| s.strip_suffix(".remd"))
+                {
                     if let Ok(ts) = ts_str.parse::<u64>() {
                         snapshots.push(SnapshotInfo {
                             path: full_path,
@@ -33,7 +36,10 @@ pub fn load_snapshot_from_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
                 }
             } else if file_name.starts_with("incremental_") && file_name.ends_with(".remd") {
                 // 增量快照：incremental_timestamp.remd
-                if let Some(ts_str) = file_name.strip_prefix("incremental_").and_then(|s| s.strip_suffix(".remd")) {
+                if let Some(ts_str) = file_name
+                    .strip_prefix("incremental_")
+                    .and_then(|s| s.strip_suffix(".remd"))
+                {
                     if let Ok(ts) = ts_str.parse::<u64>() {
                         snapshots.push(SnapshotInfo {
                             path: full_path,
@@ -51,15 +57,15 @@ pub fn load_snapshot_from_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
 
     let mut full_snapshot_loaded = false;
     let mut loaded_snapshots = Vec::new();
-    
+
     // 收集所有快照，以便按正确顺序加载
     for snapshot in &snapshots {
         loaded_snapshots.push(snapshot);
     }
-    
+
     // 反转列表，按时间顺序加载
     loaded_snapshots.reverse();
-    
+
     for snapshot in loaded_snapshots {
         match snapshot.file_type {
             SnapshotType::FullSnapshot => {
@@ -68,13 +74,13 @@ pub fn load_snapshot_from_dir(db: &mut RemDb, dir_path: &str) -> RemResult<()> {
                     db.restore_snapshot(&snapshot.path)?;
                     full_snapshot_loaded = true;
                 }
-            },
+            }
             SnapshotType::IncrementalSnapshot => {
                 if full_snapshot_loaded {
                     println!("Loading incremental snapshot: {}", snapshot.path);
                     db.restore_snapshot(&snapshot.path)?;
                 }
-            },
+            }
             _ => { /* 忽略其他类型 */ }
         }
     }
@@ -166,7 +172,7 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
     // 1. 扫描snapshot和wal数据目录，识别可用文件
     let mut snapshots = Vec::new();
     let mut wal_files = Vec::new();
-    
+
     if let Ok(entries) = fs::read_dir(wal_dir) {
         for entry in entries {
             if let Ok(entry) = entry {
@@ -174,11 +180,14 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
                 if file_path.is_file() {
                     let file_name = file_path.file_name().unwrap().to_string_lossy().to_string();
                     let full_path = file_path.to_string_lossy().to_string();
-                    
+
                     // 解析文件名，提取类型和时间戳/序列号
                     if file_name.starts_with("full_") && file_name.ends_with(".remd") {
                         // 全量快照：full_timestamp.remd
-                        if let Some(ts_str) = file_name.strip_prefix("full_").and_then(|s| s.strip_suffix(".remd")) {
+                        if let Some(ts_str) = file_name
+                            .strip_prefix("full_")
+                            .and_then(|s| s.strip_suffix(".remd"))
+                        {
                             if let Ok(ts) = ts_str.parse::<u64>() {
                                 snapshots.push(SnapshotInfo {
                                     path: full_path,
@@ -187,9 +196,13 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
                                 });
                             }
                         }
-                    } else if file_name.starts_with("incremental_") && file_name.ends_with(".remd") {
+                    } else if file_name.starts_with("incremental_") && file_name.ends_with(".remd")
+                    {
                         // 增量快照：incremental_timestamp.remd
-                        if let Some(ts_str) = file_name.strip_prefix("incremental_").and_then(|s| s.strip_suffix(".remd")) {
+                        if let Some(ts_str) = file_name
+                            .strip_prefix("incremental_")
+                            .and_then(|s| s.strip_suffix(".remd"))
+                        {
                             if let Ok(ts) = ts_str.parse::<u64>() {
                                 snapshots.push(SnapshotInfo {
                                     path: full_path,
@@ -227,30 +240,33 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
             }
         }
     }
-    
+
     // 2. 查找最新的完整快照（Snapshot或完整Checkpoint）
     snapshots.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    
+
     let mut snapshot_seq = 0;
-    
+
     // 3. 加载最新快照（如果有）
-    if let Some(latest_snapshot) = snapshots.iter().find(|s| 
-        matches!(s.file_type, SnapshotType::FullSnapshot | SnapshotType::Checkpoint)
-    ) {
+    if let Some(latest_snapshot) = snapshots.iter().find(|s| {
+        matches!(
+            s.file_type,
+            SnapshotType::FullSnapshot | SnapshotType::Checkpoint
+        )
+    }) {
         // 加载该快照到内存
         println!("Loading latest snapshot: {}", latest_snapshot.path);
         db.restore_snapshot(&latest_snapshot.path)?;
-        
+
         // 确定快照对应的序列号
         snapshot_seq = db.snapshot_version as u64;
         println!("Snapshot loaded with sequence number: {}", snapshot_seq);
     } else {
         println!("No full snapshot or checkpoint found, will replay all WAL files");
     }
-    
+
     // 4. 按序列号排序WAL文件
     wal_files.sort_by(|a, b| a.1.cmp(&b.1));
-    
+
     // 5. 筛选出需要重放的WAL文件
     let total_wal_files = wal_files.len();
     let mut wal_files_to_replay = Vec::new();
@@ -262,26 +278,30 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
             wal_files_to_replay.push((path, seq));
         }
     }
-    
+
     // 6. 重放WAL中的操作
-    println!("Found {} WAL files in total, {} to replay", total_wal_files, wal_files_to_replay.len());
-    
+    println!(
+        "Found {} WAL files in total, {} to replay",
+        total_wal_files,
+        wal_files_to_replay.len()
+    );
+
     // 如果有WAL文件需要重放，尝试使用LogManager进行重放
     if !wal_files_to_replay.is_empty() {
         println!("Attempting to replay WAL files...");
-        
+
         // 尝试使用LogManager进行WAL重放
         unsafe {
             if let Some(log_manager) = remdb::transaction::get_log_manager() {
                 println!("✓ LogManager found, attempting recovery...");
-                
+
                 // 调试信息：LogManager found and ready for recovery
-                
+
                 // 尝试恢复，使用更详细的错误处理
                 match log_manager.recover(db) {
                     Ok(_) => {
                         println!("✓ WAL recovery completed successfully");
-                    },
+                    }
                     Err(err) => {
                         println!("Warning: WAL recovery failed with error: {:?}", err);
                         println!("  This might be due to:");
@@ -299,7 +319,7 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
     } else {
         println!("No WAL files need to be replayed");
     }
-    
+
     // 7. 数据恢复到最新一致状态
     println!("✓ Data recovery completed successfully");
     Ok(())

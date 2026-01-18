@@ -50,24 +50,24 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
         rows: Vec::new(),
         affected_rows: 0,
     };
-    
+
     // 标记是否有实际的SQL语句需要执行
     let mut has_statement = false;
-    
+
     for line in sql.lines() {
         let trimmed_line = line.trim();
-        
+
         // 跳过空行和注释行
         if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
             continue;
         }
-        
+
         has_statement = true;
-        
+
         // 添加当前行到语句
         current_statement.push_str(trimmed_line);
         current_statement.push(' ');
-        
+
         // 如果语句以分号结束，执行它
         if trimmed_line.ends_with(';') {
             // 移除分号和多余空格
@@ -85,7 +85,7 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
                         }
                         // 添加行数据
                         result_set.rows.extend(result.rows);
-                    },
+                    }
                     Err(err) => {
                         return Err(err);
                     }
@@ -95,7 +95,7 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
             current_statement.clear();
         }
     }
-    
+
     // 执行最后一个没有分号的语句
     let statement = current_statement.trim();
     if !statement.is_empty() {
@@ -111,18 +111,18 @@ pub fn execute_extended_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Re
                 }
                 // 添加行数据
                 result_set.rows.extend(result.rows);
-            },
+            }
             Err(err) => {
                 return Err(err);
             }
         }
     }
-    
+
     // 如果没有实际的SQL语句需要执行，直接返回空结果集
     if !has_statement {
         return Ok(result_set);
     }
-    
+
     Ok(result_set)
 }
 
@@ -240,7 +240,7 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 remdb::transaction::IsolationLevel::ReadCommitted,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                0
+                0,
             )?;
         }
         // 返回成功结果
@@ -296,41 +296,39 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 /// 执行TABLES命令
 fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
     // 直接查询所有表的名称
-    // 我们需要遍历所有可能的表ID，直到获取失败为止
     let columns = vec!["Tables".to_string()];
     let mut rows = Vec::new();
     let mut affected_rows = 0;
-    
-    // 遍历所有普通表
+
+    // 遍历所有普通表：从table_id 0开始，直到连续10个ID不存在表
     let mut table_id = 0;
-    while table_id < 100 { // 合理的最大表数
+    let mut consecutive_errors = 0;
+    let max_consecutive_errors = 10;
+    let max_table_id = 100; // 安全上限，防止无限循环
+
+    while table_id < max_table_id && consecutive_errors < max_consecutive_errors {
         match db.get_table(table_id) {
             Ok(table) => {
-                // 添加表名到结果集
+                // 找到表，添加到结果集
                 rows.push(vec![table.def.name.to_string()]);
                 affected_rows += 1;
-            },
+                consecutive_errors = 0; // 重置连续错误计数
+            }
             Err(_) => {
-                // 表不存在，继续检查下一个ID
+                // 表不存在，增加连续错误计数
+                consecutive_errors += 1;
             }
         }
         table_id += 1;
     }
-    
-    // 遍历所有时序表
-    let mut ts_table_id = 0;
-    while ts_table_id < 100 { // 合理的最大时序表数
-        match db.get_time_series_table(ts_table_id) {
-            Ok(ts_table) => {
-                // 添加时序表名到结果集
-                rows.push(vec![ts_table.def.base.name.to_string()]);
-                affected_rows += 1;
-            },
-            Err(_) => {
-                // 时序表不存在，继续检查下一个ID
-            }
+
+    // 遍历所有时序表（使用正确的API获取表数量并遍历）
+    let ts_table_count = db.time_series_table_count();
+    for ts_table_id in 0..ts_table_count {
+        if let Ok(ts_table) = db.get_time_series_table(ts_table_id) {
+            rows.push(vec![ts_table.def.base.name.to_string()]);
+            affected_rows += 1;
         }
-        ts_table_id += 1;
     }
 
     // 构造结果集
@@ -349,33 +347,49 @@ fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<Res
     // 构造结果集
     Ok(ResultSet {
         columns: result.columns.clone(),
-        rows: result.rows.iter().map(|row| {
-            row.values.iter().map(|value| {
-                unsafe {
-                    // 将TypedValue转换为字符串
-                    match value.value_type {
-                        remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
-                        remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
-                        remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
-                        remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
-                        remdb::types::DataType::Int8 => format!("{}", value.value.i8),
-                        remdb::types::DataType::Int16 => format!("{}", value.value.i16),
-                        remdb::types::DataType::Int32 => format!("{}", value.value.i32),
-                        remdb::types::DataType::Int64 => format!("{}", value.value.i64),
-                        remdb::types::DataType::Float32 => format!("{}", value.value.float32),
-                        remdb::types::DataType::Float64 => format!("{}", value.value.float64),
-                        remdb::types::DataType::Bool => format!("{}", value.value.bool),
-                        remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
-                        remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
-                        remdb::types::DataType::Interval => format!("{}", value.value.u64),
-                        remdb::types::DataType::String => {
-                            let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
-                            string_slice.trim_end_matches(char::from(0)).to_string()
-                        },
-                    }
-                }
-            }).collect()
-        }).collect(),
+        rows: result
+            .rows
+            .iter()
+            .map(|row| {
+                row.values
+                    .iter()
+                    .map(|value| {
+                        unsafe {
+                            // 将TypedValue转换为字符串
+                            match value.value_type {
+                                remdb::types::DataType::UInt8 => format!("{}", value.value.u8),
+                                remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
+                                remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
+                                remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
+                                remdb::types::DataType::Int8 => format!("{}", value.value.i8),
+                                remdb::types::DataType::Int16 => format!("{}", value.value.i16),
+                                remdb::types::DataType::Int32 => format!("{}", value.value.i32),
+                                remdb::types::DataType::Int64 => format!("{}", value.value.i64),
+                                remdb::types::DataType::Float32 => {
+                                    format!("{}", value.value.float32)
+                                }
+                                remdb::types::DataType::Float64 => {
+                                    format!("{}", value.value.float64)
+                                }
+                                remdb::types::DataType::Bool => format!("{}", value.value.bool),
+                                remdb::types::DataType::Timestamp => {
+                                    format!("{}", value.value.timestamp)
+                                }
+                                remdb::types::DataType::TimestampTZ => {
+                                    format!("{}", value.value.timestamp)
+                                }
+                                remdb::types::DataType::Interval => format!("{}", value.value.u64),
+                                remdb::types::DataType::String => {
+                                    let string_slice =
+                                        core::str::from_utf8(&value.value.string).unwrap_or("");
+                                    string_slice.trim_end_matches(char::from(0)).to_string()
+                                }
+                            }
+                        }
+                    })
+                    .collect()
+            })
+            .collect(),
         affected_rows: result.rows.len(),
     })
 }
@@ -419,8 +433,12 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     let result = db.sql_query(sql)?;
 
     // 调试：打印结果基本信息
-    debug_println!("Debug: Query result - rows: {}, columns: {}", result.rows.len(), result.columns.len());
-    
+    debug_println!(
+        "Debug: Query result - rows: {}, columns: {}",
+        result.rows.len(),
+        result.columns.len()
+    );
+
     // 调试：打印列信息
     debug_println!("Debug: Columns:");
     for (i, col) in result.columns.iter().enumerate() {
@@ -433,60 +451,70 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     // 遍历所有行，使用引用迭代避免所有权转移
     for (row_idx, row) in result.rows.iter().enumerate() {
         debug_println!("Debug: Row [{}] - values: {}", row_idx, row.values.len());
-        
+
         let mut row_data = Vec::new();
 
         // 遍历行中的所有值，将remdb::TypedValue转换为字符串
         for (val_idx, value) in row.values.iter().enumerate() {
-            debug_println!("Debug:   Value [{}] - type: {:?}", val_idx, value.value_type);
-            
+            debug_println!(
+                "Debug:   Value [{}] - type: {:?}",
+                val_idx,
+                value.value_type
+            );
+
             let value_str = unsafe {
                 // 调试：打印value的各个字段
-                debug_println!("Debug:     Value fields - u8: {}, u16: {}, u32: {}, u64: {}, i8: {}, i16: {}, i32: {}, i64: {}, float32: {}, float64: {}, string: '{:?}'", 
-                    value.value.u8, 
-                    value.value.u16, 
-                    value.value.u32, 
-                    value.value.u64, 
-                    value.value.i8, 
-                    value.value.i16, 
-                    value.value.i32, 
-                    value.value.i64, 
-                    value.value.float32, 
-                    value.value.float64, 
+                debug_println!(
+                    "Debug:     Value fields - u8: {}, u16: {}, u32: {}, u64: {}, i8: {}, i16: {}, i32: {}, i64: {}, float32: {}, float64: {}, string: '{:?}'",
+                    value.value.u8,
+                    value.value.u16,
+                    value.value.u32,
+                    value.value.u64,
+                    value.value.i8,
+                    value.value.i16,
+                    value.value.i32,
+                    value.value.i64,
+                    value.value.float32,
+                    value.value.float64,
                     core::str::from_utf8(&value.value.string).unwrap_or("")
                 );
-                
+
                 // 对于聚合函数结果，我们需要特殊处理
                 // 检查当前SQL是否包含聚合函数
                 let sql_lower = sql.to_lowercase();
-                let is_aggregation = sql_lower.contains("max(") || sql_lower.contains("min(") || 
-                                    sql_lower.contains("count(") || sql_lower.contains("sum(") || 
-                                    sql_lower.contains("avg(") || sql_lower.contains("var(") || 
-                                    sql_lower.contains("stddev(") || sql_lower.contains("var_samp(") || 
-                                    sql_lower.contains("stddev_samp(");
-                
+                let is_aggregation = sql_lower.contains("max(")
+                    || sql_lower.contains("min(")
+                    || sql_lower.contains("count(")
+                    || sql_lower.contains("sum(")
+                    || sql_lower.contains("avg(")
+                    || sql_lower.contains("var(")
+                    || sql_lower.contains("stddev(")
+                    || sql_lower.contains("var_samp(")
+                    || sql_lower.contains("stddev_samp(");
+
                 if is_aggregation {
                     // 对于聚合函数，我们需要执行实际的聚合计算
                     // 但由于我们无法访问表的原始数据，我们需要采用另一种方法
                     // 让我们直接执行一个简单的查询，获取表中的所有数据，然后手动计算聚合结果
                     debug_println!("Debug:     Detected aggregation query, trying to get raw data");
-                    
+
                     // 提取表名
                     let table_name_start = sql_lower.find("from ").map(|pos| pos + 5).unwrap_or(0);
                     let table_name_end = sql_lower[table_name_start..]
                         .find(|c: char| c.is_whitespace() || c == ';' || c == ')' || c == ',')
                         .unwrap_or_else(|| sql_lower[table_name_start..].len());
-                    let table_name = &sql_lower[table_name_start..table_name_start + table_name_end];
-                    
+                    let table_name =
+                        &sql_lower[table_name_start..table_name_start + table_name_end];
+
                     // 执行查询获取所有数据
                     let raw_sql = format!("SELECT * FROM {}", table_name);
                     debug_println!("Debug:     Executing raw query: {}", raw_sql);
                     let raw_result = db.sql_query(&raw_sql)?;
-                    
+
                     // 根据当前列名确定聚合函数类型并执行相应的计算
                     let current_col_name = &result.columns[val_idx];
                     debug_println!("Debug:     Current column: {}", current_col_name);
-                    
+
                     // 提取当前聚合函数对应的列名
                     let agg_col = {
                         // 获取当前列名对应的聚合函数类型
@@ -500,21 +528,23 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                             "var_samp" => "var_samp(",
                             "stddev_samp" => "stddev_samp(",
                             "count" => "count(",
-                            _ => ""
+                            _ => "",
                         };
-                        
+
                         if agg_func.is_empty() {
                             ""
                         } else {
                             // 针对当前聚合函数提取对应的列名
-                            sql_lower.split(agg_func).nth(1)
+                            sql_lower
+                                .split(agg_func)
+                                .nth(1)
                                 .and_then(|s| s.split(')').next())
                                 .unwrap_or("")
                                 .trim()
                         }
                     };
                     debug_println!("Debug:     Aggregation column: {}", agg_col);
-                    
+
                     // 收集所有数值，包括零值，使用f64提高计算精度
                     let mut numeric_values = Vec::<f64>::new();
                     for (row_idx, row) in raw_result.rows.iter().enumerate() {
@@ -541,7 +571,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                             }
                         }
                     }
-                    
+
                     // 根据列名执行相应的聚合计算
                     match current_col_name.as_str() {
                         "count" => {
@@ -549,17 +579,20 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                             let count = raw_result.rows.len() as i64;
                             debug_println!("Debug:     Calculated count value: {}", count);
                             format!("{}", count)
-                        },
+                        }
                         "max" => {
-                            let max_val = numeric_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                            let max_val = numeric_values
+                                .iter()
+                                .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
                             debug_println!("Debug:     Calculated max value: {}", max_val);
                             format!("{}", max_val)
-                        },
+                        }
                         "min" => {
-                            let min_val = numeric_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+                            let min_val =
+                                numeric_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
                             debug_println!("Debug:     Calculated min value: {}", min_val);
                             format!("{}", min_val)
-                        },
+                        }
                         "avg" => {
                             let sum: f64 = numeric_values.iter().sum();
                             let avg = if numeric_values.is_empty() {
@@ -568,43 +601,47 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 sum / numeric_values.len() as f64
                             };
                             format!("{:.4}", avg)
-                        },
+                        }
                         "sum" => {
                             let sum: f64 = numeric_values.iter().sum();
                             debug_println!("Debug:     Calculated sum value: {}", sum);
                             format!("{}", sum)
-                        },
+                        }
                         "var" => {
                             if numeric_values.len() < 2 {
                                 "0".to_string()
                             } else {
                                 let sum: f64 = numeric_values.iter().sum();
                                 let avg = sum / numeric_values.len() as f64;
-                                let variance: f64 = numeric_values.iter()
+                                let variance: f64 = numeric_values
+                                    .iter()
                                     .map(|&x| {
                                         let diff = x - avg;
                                         diff * diff
                                     })
-                                    .sum::<f64>() / numeric_values.len() as f64;
+                                    .sum::<f64>()
+                                    / numeric_values.len() as f64;
                                 format!("{:.4}", variance)
                             }
-                        },
+                        }
                         "stddev" => {
                             if numeric_values.len() < 2 {
                                 "0".to_string()
                             } else {
                                 let sum: f64 = numeric_values.iter().sum();
                                 let avg = sum / numeric_values.len() as f64;
-                                let variance: f64 = numeric_values.iter()
+                                let variance: f64 = numeric_values
+                                    .iter()
                                     .map(|&x| {
                                         let diff = x - avg;
                                         diff * diff
                                     })
-                                    .sum::<f64>() / numeric_values.len() as f64;
+                                    .sum::<f64>()
+                                    / numeric_values.len() as f64;
                                 let stddev = variance.sqrt();
                                 format!("{:.4}", stddev)
                             }
-                        },
+                        }
                         "var_samp" => {
                             if numeric_values.len() < 2 {
                                 "0".to_string()
@@ -612,15 +649,17 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 let sum: f64 = numeric_values.iter().sum();
                                 let avg = sum / numeric_values.len() as f64;
                                 // 使用n-1作为分母计算样本方差
-                                let variance: f64 = numeric_values.iter()
+                                let variance: f64 = numeric_values
+                                    .iter()
                                     .map(|&x| {
                                         let diff = x - avg;
                                         diff * diff
                                     })
-                                    .sum::<f64>() / (numeric_values.len() - 1) as f64;
+                                    .sum::<f64>()
+                                    / (numeric_values.len() - 1) as f64;
                                 format!("{:.4}", variance)
                             }
-                        },
+                        }
                         "stddev_samp" => {
                             if numeric_values.len() < 2 {
                                 "0".to_string()
@@ -628,16 +667,18 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 let sum: f64 = numeric_values.iter().sum();
                                 let avg = sum / numeric_values.len() as f64;
                                 // 使用n-1作为分母计算样本方差，然后开平方得到样本标准差
-                                let variance: f64 = numeric_values.iter()
+                                let variance: f64 = numeric_values
+                                    .iter()
                                     .map(|&x| {
                                         let diff = x - avg;
                                         diff * diff
                                     })
-                                    .sum::<f64>() / (numeric_values.len() - 1) as f64;
+                                    .sum::<f64>()
+                                    / (numeric_values.len() - 1) as f64;
                                 let stddev = variance.sqrt();
                                 format!("{:.4}", stddev)
                             }
-                        },
+                        }
                         _ => {
                             // 对于其他聚合函数，使用默认处理
                             match value.value_type {
@@ -649,16 +690,25 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 remdb::types::DataType::UInt16 => format!("{}", value.value.u16),
                                 remdb::types::DataType::UInt32 => format!("{}", value.value.u32),
                                 remdb::types::DataType::UInt64 => format!("{}", value.value.u64),
-                                remdb::types::DataType::Float32 => format!("{}", value.value.float32),
-                                remdb::types::DataType::Float64 => format!("{}", value.value.float64),
+                                remdb::types::DataType::Float32 => {
+                                    format!("{}", value.value.float32)
+                                }
+                                remdb::types::DataType::Float64 => {
+                                    format!("{}", value.value.float64)
+                                }
                                 remdb::types::DataType::Bool => format!("{}", value.value.bool),
-                                remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
-                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
+                                remdb::types::DataType::Timestamp => {
+                                    format!("{}", value.value.timestamp)
+                                }
+                                remdb::types::DataType::TimestampTZ => {
+                                    format!("{}", value.value.timestamp)
+                                }
                                 remdb::types::DataType::Interval => format!("{}", value.value.u64),
                                 remdb::types::DataType::String => {
-                                    let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                                    let string_slice =
+                                        core::str::from_utf8(&value.value.string).unwrap_or("");
                                     string_slice.trim_end_matches(char::from(0)).to_string()
-                                },
+                                }
                             }
                         }
                     }
@@ -680,13 +730,14 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                         remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
                         remdb::types::DataType::Interval => format!("{}", value.value.u64),
                         remdb::types::DataType::String => {
-                            let string_slice = core::str::from_utf8(&value.value.string).unwrap_or("");
+                            let string_slice =
+                                core::str::from_utf8(&value.value.string).unwrap_or("");
                             string_slice.trim_end_matches(char::from(0)).to_string()
-                        },
+                        }
                     }
                 }
             };
-            
+
             debug_println!("Debug:     Converted to: '{}'", value_str);
 
             row_data.push(value_str);
@@ -729,10 +780,13 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
     let specified_columns = extract_columns(&sql_lower)?;
 
     // 检查INSERT语句是否包含id列作为独立列名
-    let has_id_column = sql_lower.contains("(id") || 
-                        sql_lower.contains(", id") || 
-                        sql_lower.contains("id,") && !sql_lower.contains("device_id") && !sql_lower.contains("user_id") && !sql_lower.contains("group_id");
-    
+    let has_id_column = sql_lower.contains("(id")
+        || sql_lower.contains(", id")
+        || sql_lower.contains("id,")
+            && !sql_lower.contains("device_id")
+            && !sql_lower.contains("user_id")
+            && !sql_lower.contains("group_id");
+
     if !has_id_column {
         // 如果没有提供id，自动生成一个
         let sql_with_pk = generate_auto_inc_sql(sql)?;
@@ -742,23 +796,23 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
         let result = db.sql_query(&sql_with_pk)?;
 
         // 构造结果集
-    let affected_rows = if let Some(row) = result.rows.first() {
-        if let Some(value) = row.values.first() {
-            // 从结果中提取affected_rows值
-            unsafe {
-                match value.value_type {
-                    remdb::types::DataType::UInt64 => value.value.u64 as usize,
-                    remdb::types::DataType::Int64 => value.value.i64 as usize,
-                    remdb::types::DataType::Int32 => value.value.i32 as usize,
-                    _ => 1 // 默认值为1，表示插入成功
+        let affected_rows = if let Some(row) = result.rows.first() {
+            if let Some(value) = row.values.first() {
+                // 从结果中提取affected_rows值
+                unsafe {
+                    match value.value_type {
+                        remdb::types::DataType::UInt64 => value.value.u64 as usize,
+                        remdb::types::DataType::Int64 => value.value.i64 as usize,
+                        remdb::types::DataType::Int32 => value.value.i32 as usize,
+                        _ => 1, // 默认值为1，表示插入成功
+                    }
                 }
+            } else {
+                1 // 默认值为1，表示插入成功
             }
         } else {
             1 // 默认值为1，表示插入成功
-        }
-    } else {
-        1 // 默认值为1，表示插入成功
-    };
+        };
 
         return Ok(ResultSet {
             columns: Vec::new(),
@@ -779,7 +833,7 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                     remdb::types::DataType::UInt64 => value.value.u64 as usize,
                     remdb::types::DataType::Int64 => value.value.i64 as usize,
                     remdb::types::DataType::Int32 => value.value.i32 as usize,
-                    _ => result.rows.len()
+                    _ => result.rows.len(),
                 }
             }
         } else {
@@ -797,22 +851,30 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 }
 
 /// 执行批量INSERT命令
-fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: &str) -> std::result::Result<ResultSet, SqlError> {
+fn execute_batch_insert(
+    db: &mut RemDb,
+    sql: &str,
+    table_name: &str,
+    sql_lower: &str,
+) -> std::result::Result<ResultSet, SqlError> {
     // 提取指定的列名
     let specified_columns = extract_columns(sql_lower)?;
-    
+
     // 提取所有值组
     let values_list = extract_batch_values(sql)?;
-    
+
     // 检查是否需要自动生成id
-       let needs_auto_id = !sql_lower.contains("(id") && 
-                           !sql_lower.contains(", id") && 
-                           !(sql_lower.contains("id,") && !sql_lower.contains("device_id") && !sql_lower.contains("user_id") && !sql_lower.contains("group_id"));
-    
+    let needs_auto_id = !sql_lower.contains("(id")
+        && !sql_lower.contains(", id")
+        && !(sql_lower.contains("id,")
+            && !sql_lower.contains("device_id")
+            && !sql_lower.contains("user_id")
+            && !sql_lower.contains("group_id"));
+
     if needs_auto_id {
         // 需要自动生成id，为每个值组生成完整的INSERT语句
         let mut total_affected = 0;
-        
+
         for values in values_list {
             // 为每条记录生成自动id
             let sql_with_pk = generate_auto_inc_sql_for_batch(sql, &values)?;
@@ -826,7 +888,7 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
             let result = db.sql_query(&final_sql)?;
             total_affected += result.rows.len();
         }
-        
+
         // 构造结果集
         return Ok(ResultSet {
             columns: Vec::new(),
@@ -837,7 +899,7 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
         // 不需要自动生成id，使用batch_insert_record方法
         // 转换列名为&str数组
         let column_refs: Vec<&str> = specified_columns.iter().map(|col| col.as_str()).collect();
-        
+
         // 由于生命周期问题，我们直接在循环中构建并执行批量插入
         // 或者，我们可以将所有值转换为字符串，然后构建完整的SQL语句
         // 这里我们选择将批量插入拆分为单条插入，因为batch_insert_record的生命周期要求较高
@@ -849,7 +911,7 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
             } else {
                 "INSERT INTO "
             };
-            
+
             // 为每条记录构建INSERT语句
             let insert_sql = format!(
                 "{}{} ({}) VALUES ({})
@@ -862,9 +924,9 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
             let result = db.sql_query(&insert_sql)?;
             total_affected += result.rows.len();
         }
-        
+
         let affected_rows = total_affected;
-        
+
         // 构造结果集
         Ok(ResultSet {
             columns: Vec::new(),
@@ -877,15 +939,15 @@ fn execute_batch_insert(db: &mut RemDb, sql: &str, table_name: &str, sql_lower: 
 /// 从批量INSERT语句中提取所有值组
 fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlError> {
     let sql_lower = sql.trim().to_lowercase();
-    
+
     // 查找VALUES关键字
     let values_pos = sql_lower
         .find("values")
         .ok_or(SqlError::Parsing("Missing VALUES keyword".to_string()))?;
-    
+
     // 提取VALUES部分
     let values_part = &sql[values_pos + 6..].trim();
-    
+
     // 解析多个值组，格式为 (value1, value2, ...), (value1, value2, ...), ...
     let mut result = Vec::new();
     let mut current_group = Vec::new();
@@ -894,7 +956,7 @@ fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlE
     let mut quote_char = '\0';
     let mut current_value = String::new();
     let mut bracket_depth = 0;
-    
+
     for c in values_part.chars() {
         match c {
             '"' | '\'' => {
@@ -909,7 +971,7 @@ fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlE
                 } else {
                     current_value.push(c);
                 }
-            },
+            }
             '(' => {
                 if !in_quotes {
                     bracket_depth += 1;
@@ -922,7 +984,7 @@ fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlE
                 } else {
                     current_value.push(c);
                 }
-            },
+            }
             ')' => {
                 if !in_quotes {
                     bracket_depth -= 1;
@@ -942,7 +1004,7 @@ fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlE
                 } else {
                     current_value.push(c);
                 }
-            },
+            }
             ',' => {
                 if !in_quotes && in_group && bracket_depth == 1 {
                     // 值分隔符
@@ -951,35 +1013,38 @@ fn extract_batch_values(sql: &str) -> std::result::Result<Vec<Vec<String>>, SqlE
                 } else {
                     current_value.push(c);
                 }
-            },
+            }
             ';' => {
                 // SQL语句结束，忽略
                 break;
-            },
+            }
             _ => {
                 if in_group {
                     current_value.push(c);
                 }
-            },
+            }
         }
     }
-    
+
     Ok(result)
 }
 
 /// 为批量插入生成带有自动递增主键的SQL语句
-fn generate_auto_inc_sql_for_batch(sql: &str, values: &Vec<String>) -> std::result::Result<String, SqlError> {
+fn generate_auto_inc_sql_for_batch(
+    sql: &str,
+    values: &Vec<String>,
+) -> std::result::Result<String, SqlError> {
     let sql_lower = sql.trim().to_lowercase();
-    
+
     // 提取表名
     let table_name = extract_table_name(&sql_lower)?;
-    
+
     // 提取列名
     let specified_columns = extract_columns(&sql_lower)?;
-    
+
     // 生成唯一主键值：使用随机32位整数，确保在INT范围内
     let new_pk = rand::random::<u32>() as u64;
-    
+
     // 构建新的INSERT语句
     let new_sql = if specified_columns.is_empty() {
         // 没有指定列名时，直接在值列表前添加id值
@@ -1000,7 +1065,7 @@ fn generate_auto_inc_sql_for_batch(sql: &str, values: &Vec<String>) -> std::resu
             values.join(", ")
         )
     };
-    
+
     Ok(new_sql)
 }
 
@@ -1436,61 +1501,79 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                             if let Some(default_pos) = field_def_lower.find("default") {
                                 // 提取默认值部分
                                 let default_part = field_def[default_pos + 7..].trim();
-                                
+
                                 // 移除可能的逗号和后续约束
                                 let mut default_str = default_part;
                                 if let Some(comma_pos) = default_str.find(',') {
                                     default_str = &default_str[..comma_pos].trim();
                                 } else {
                                     // 移除后续约束关键字
-                                    for keyword in ["primary", "unique", "not", "auto_increment", "autoincrement"] {
-                                        if let Some(key_pos) = default_str.to_lowercase().find(keyword) {
+                                    for keyword in [
+                                        "primary",
+                                        "unique",
+                                        "not",
+                                        "auto_increment",
+                                        "autoincrement",
+                                    ] {
+                                        if let Some(key_pos) =
+                                            default_str.to_lowercase().find(keyword)
+                                        {
                                             default_str = &default_str[..key_pos].trim();
                                             break;
                                         }
                                     }
                                 }
                                 default_str = default_str.trim_end_matches(',');
-                                
+
                                 // 根据数据类型转换默认值
                                 use remdb::types::Value;
                                 default_value = match data_type {
-                                    remdb::types::DataType::Int32 => {
-                                        Some(Value { i32: default_str.parse().unwrap_or(0) })
-                                    },
-                                    remdb::types::DataType::Int64 => {
-                                        Some(Value { i64: default_str.parse().unwrap_or(0) })
-                                    },
-                                    remdb::types::DataType::Float32 => {
-                                        Some(Value { float32: default_str.parse().unwrap_or(0.0) })
-                                    },
-                                    remdb::types::DataType::Float64 => {
-                                        Some(Value { float64: default_str.parse().unwrap_or(0.0) })
-                                    },
+                                    remdb::types::DataType::Int32 => Some(Value {
+                                        i32: default_str.parse().unwrap_or(0),
+                                    }),
+                                    remdb::types::DataType::Int64 => Some(Value {
+                                        i64: default_str.parse().unwrap_or(0),
+                                    }),
+                                    remdb::types::DataType::Float32 => Some(Value {
+                                        float32: default_str.parse().unwrap_or(0.0),
+                                    }),
+                                    remdb::types::DataType::Float64 => Some(Value {
+                                        float64: default_str.parse().unwrap_or(0.0),
+                                    }),
                                     remdb::types::DataType::Bool => {
                                         let lower = default_str.to_lowercase();
-                                        Some(Value { bool: lower == "true" || lower == "1" })
-                                    },
+                                        Some(Value {
+                                            bool: lower == "true" || lower == "1",
+                                        })
+                                    }
                                     remdb::types::DataType::String => {
                                         // 移除引号
-                                        let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                                        let str_val =
+                                            default_str.trim_matches(|c| c == '\'' || c == '"');
                                         let mut buf = [0; remdb::types::MAX_STRING_LEN];
-                                        let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                                        let len = core::cmp::min(
+                                            str_val.len(),
+                                            remdb::types::MAX_STRING_LEN,
+                                        );
                                         buf[..len].copy_from_slice(str_val.as_bytes());
                                         Some(Value { string: buf })
-                                    },
+                                    }
                                     remdb::types::DataType::Timestamp => {
                                         // 处理时间戳默认值
                                         if default_str.eq_ignore_ascii_case("current_timestamp") {
                                             // 使用当前时间戳
                                             let now = remdb::types::time_utils::now_micros() as i64;
-                                            Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                                            Some(Value {
+                                                time: remdb::types::db_timestamp::new(now, 0, 6, 0),
+                                            })
                                         } else {
                                             // 尝试解析为数值时间戳
                                             let ts = default_str.parse().unwrap_or(0);
-                                            Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                                            Some(Value {
+                                                time: remdb::types::db_timestamp::new(ts, 0, 6, 0),
+                                            })
                                         }
-                                    },
+                                    }
                                     _ => None,
                                 };
                             }
@@ -1506,17 +1589,23 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                             // 检查主键
                             for (j, &part) in field_parts.iter().enumerate() {
                                 if part.eq_ignore_ascii_case("PRIMARY") {
-                                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("KEY") {
+                                    if j + 1 < field_parts.len()
+                                        && field_parts[j + 1].eq_ignore_ascii_case("KEY")
+                                    {
                                         is_primary_key = true;
                                         primary_key_index = Some(fields.len() - 1);
                                     }
                                 } else if part.eq_ignore_ascii_case("UNIQUE") {
                                     is_unique = true;
                                 } else if part.eq_ignore_ascii_case("NOT") {
-                                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("NULL") {
+                                    if j + 1 < field_parts.len()
+                                        && field_parts[j + 1].eq_ignore_ascii_case("NULL")
+                                    {
                                         is_not_null = true;
                                     }
-                                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT") || part.eq_ignore_ascii_case("AUTOINCREMENT") {
+                                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT")
+                                    || part.eq_ignore_ascii_case("AUTOINCREMENT")
+                                {
                                     is_auto_increment = true;
                                 }
                             }
@@ -1563,14 +1652,20 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
             if let Some(default_pos) = field_def_lower.find("default") {
                 // 提取默认值部分
                 let default_part = last_field[default_pos + 7..].trim();
-                
+
                 // 移除可能的逗号和后续约束
                 let mut default_str = default_part;
                 if let Some(comma_pos) = default_str.find(',') {
                     default_str = &default_str[..comma_pos].trim();
                 } else {
                     // 移除后续约束关键字
-                    for keyword in ["primary", "unique", "not", "auto_increment", "autoincrement"] {
+                    for keyword in [
+                        "primary",
+                        "unique",
+                        "not",
+                        "auto_increment",
+                        "autoincrement",
+                    ] {
                         if let Some(key_pos) = default_str.to_lowercase().find(keyword) {
                             default_str = &default_str[..key_pos].trim();
                             break;
@@ -1578,26 +1673,28 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                     }
                 }
                 default_str = default_str.trim_end_matches(',');
-                
+
                 // 根据数据类型转换默认值
                 use remdb::types::Value;
                 default_value = match data_type {
-                    remdb::types::DataType::Int32 => {
-                        Some(Value { i32: default_str.parse().unwrap_or(0) })
-                    },
-                    remdb::types::DataType::Int64 => {
-                        Some(Value { i64: default_str.parse().unwrap_or(0) })
-                    },
-                    remdb::types::DataType::Float32 => {
-                        Some(Value { float32: default_str.parse().unwrap_or(0.0) })
-                    },
-                    remdb::types::DataType::Float64 => {
-                        Some(Value { float64: default_str.parse().unwrap_or(0.0) })
-                    },
+                    remdb::types::DataType::Int32 => Some(Value {
+                        i32: default_str.parse().unwrap_or(0),
+                    }),
+                    remdb::types::DataType::Int64 => Some(Value {
+                        i64: default_str.parse().unwrap_or(0),
+                    }),
+                    remdb::types::DataType::Float32 => Some(Value {
+                        float32: default_str.parse().unwrap_or(0.0),
+                    }),
+                    remdb::types::DataType::Float64 => Some(Value {
+                        float64: default_str.parse().unwrap_or(0.0),
+                    }),
                     remdb::types::DataType::Bool => {
                         let lower = default_str.to_lowercase();
-                        Some(Value { bool: lower == "true" || lower == "1" })
-                    },
+                        Some(Value {
+                            bool: lower == "true" || lower == "1",
+                        })
+                    }
                     remdb::types::DataType::String => {
                         // 移除引号
                         let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
@@ -1605,19 +1702,23 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                         let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
                         buf[..len].copy_from_slice(str_val.as_bytes());
                         Some(Value { string: buf })
-                    },
+                    }
                     remdb::types::DataType::Timestamp => {
                         // 处理时间戳默认值
                         if default_str.eq_ignore_ascii_case("current_timestamp") {
                             // 使用当前时间戳
                             let now = remdb::types::time_utils::now_micros() as i64;
-                            Some(Value { time: remdb::types::db_timestamp::new(now, 0, 6, 0) })
+                            Some(Value {
+                                time: remdb::types::db_timestamp::new(now, 0, 6, 0),
+                            })
                         } else {
                             // 尝试解析为数值时间戳
                             let ts = default_str.parse().unwrap_or(0);
-                            Some(Value { time: remdb::types::db_timestamp::new(ts, 0, 6, 0) })
+                            Some(Value {
+                                time: remdb::types::db_timestamp::new(ts, 0, 6, 0),
+                            })
                         }
-                    },
+                    }
                     _ => None,
                 };
             }
@@ -1640,10 +1741,13 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 } else if part.eq_ignore_ascii_case("UNIQUE") {
                     is_unique = true;
                 } else if part.eq_ignore_ascii_case("NOT") {
-                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("NULL") {
+                    if j + 1 < field_parts.len() && field_parts[j + 1].eq_ignore_ascii_case("NULL")
+                    {
                         is_not_null = true;
                     }
-                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT") || part.eq_ignore_ascii_case("AUTOINCREMENT") {
+                } else if part.eq_ignore_ascii_case("AUTO_INCREMENT")
+                    || part.eq_ignore_ascii_case("AUTOINCREMENT")
+                {
                     is_auto_increment = true;
                 }
             }
@@ -1664,7 +1768,13 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     }
 
     // 调用 DdlExecutor::create_table 方法创建表，传递约束信息
-    remdb::DdlExecutor::create_table(db, &table_name, &fields, Some(&constraints), primary_key_index)?;
+    remdb::DdlExecutor::create_table(
+        db,
+        &table_name,
+        &fields,
+        Some(&constraints),
+        primary_key_index,
+    )?;
 
     // 构造结果集
     Ok(ResultSet {
@@ -1675,22 +1785,26 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 }
 
 /// 执行CREATE TIMESERIES TABLE命令
-fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+fn execute_create_time_series_table(
+    db: &mut RemDb,
+    sql: &str,
+) -> std::result::Result<ResultSet, SqlError> {
     // 调试：打印要执行的SQL语句
     debug_println!("Debug: Executing CREATE TIMESERIES TABLE SQL: {}", sql);
 
     let sql_lower = sql.trim().to_lowercase();
 
     // 查找表名和字段定义开始位置
-    let after_create = if let Some(rest) = sql_lower.strip_prefix("create timeseries table if not exists ") {
-        rest
-    } else {
-        sql_lower
-            .strip_prefix("create timeseries table ")
-            .ok_or(SqlError::Parsing(
-                "Not a CREATE TIMESERIES TABLE statement".to_string(),
-            ))?
-    };
+    let after_create =
+        if let Some(rest) = sql_lower.strip_prefix("create timeseries table if not exists ") {
+            rest
+        } else {
+            sql_lower
+                .strip_prefix("create timeseries table ")
+                .ok_or(SqlError::Parsing(
+                    "Not a CREATE TIMESERIES TABLE statement".to_string(),
+                ))?
+        };
     let table_name_end = after_create
         .find(|c: char| c.is_whitespace() || c == '(')
         .unwrap_or(after_create.len());
@@ -1737,7 +1851,10 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
                                 time_field = Some(field_name.to_string());
                             }
                             // 检查是否为值字段
-                            else if data_type_str == "FLOAT64" || data_type_str == "FLOAT" || data_type_str == "DOUBLE" {
+                            else if data_type_str == "FLOAT64"
+                                || data_type_str == "FLOAT"
+                                || data_type_str == "DOUBLE"
+                            {
                                 value_field = Some(field_name.to_string());
                             }
                             // 其他字段作为标签字段
@@ -1768,7 +1885,10 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
                 time_field = Some(field_name.to_string());
             }
             // 检查是否为值字段
-            else if data_type_str == "FLOAT64" || data_type_str == "FLOAT" || data_type_str == "DOUBLE" {
+            else if data_type_str == "FLOAT64"
+                || data_type_str == "FLOAT"
+                || data_type_str == "DOUBLE"
+            {
                 value_field = Some(field_name.to_string());
             }
             // 其他字段作为标签字段
@@ -1795,15 +1915,15 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
     let mut config = None;
     let mut compression_type = remdb::time_series::CompressionType::DeltaRunLength;
     let mut retention_period_secs = 7 * 24 * 3600; // 默认7天
-    
+
     // 查找WITH子句的位置
     if let Some(with_pos) = sql_lower.find(" with ") {
         let with_clause = &sql[with_pos + 6..].trim();
-        
+
         // 解析WITH子句中的属性
         let mut attr_start = 0;
         let mut bracket_count = 0;
-        
+
         for (i, c) in with_clause.char_indices() {
             match c {
                 '(' => bracket_count += 1,
@@ -1819,13 +1939,13 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
                 _ => {}
             }
         }
-        
+
         // 处理最后一个属性
         let last_attr = &with_clause[attr_start..].trim();
         if !last_attr.is_empty() {
             parse_with_attr(last_attr, &mut compression_type, &mut retention_period_secs)?;
         }
-        
+
         // 创建配置
         config = Some(remdb::time_series::TimeSeriesConfig {
             partition_duration_secs: 3600, // 默认1小时
@@ -1841,7 +1961,7 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
         &time_field,
         &value_field,
         &tag_field_refs,
-        config
+        config,
     )?;
 
     // 构造结果集
@@ -1853,24 +1973,28 @@ fn execute_create_time_series_table(db: &mut RemDb, sql: &str) -> std::result::R
 }
 
 /// 解析WITH子句中的属性
-fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::CompressionType, retention_period_secs: &mut u64) -> std::result::Result<(), SqlError> {
+fn parse_with_attr(
+    attr: &str,
+    compression_type: &mut remdb::time_series::CompressionType,
+    retention_period_secs: &mut u64,
+) -> std::result::Result<(), SqlError> {
     let attr_lower = attr.trim().to_lowercase();
-    
+
     // 解析COMPRESSION属性
     if attr_lower.starts_with("compression = ") {
         let comp_part = attr_lower.strip_prefix("compression = ").unwrap();
-        
+
         // 提取括号内的内容
         let comp_content = comp_part.strip_prefix("(").and_then(|s| s.strip_suffix(")")).ok_or(SqlError::Parsing(
             "Invalid COMPRESSION syntax, expected WITH COMPRESSION = (algorithm='delta-delta', enabled=true)".to_string(),
         ))?;
-        
+
         // 解析algorithm属性
         let mut algorithm = "delta-runlength";
-        
+
         let mut prop_start = 0;
         let mut bracket_count = 0;
-        
+
         for (i, c) in comp_content.char_indices() {
             match c {
                 '(' => bracket_count += 1,
@@ -1879,9 +2003,11 @@ fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::Compre
                     if bracket_count == 0 {
                         let prop = &comp_content[prop_start..i].trim();
                         if let Some(alg_pos) = prop.find("algorithm='") {
-                            let alg_end = prop[alg_pos + 11..].find("'").ok_or(SqlError::Parsing(
-                                "Invalid algorithm syntax, expected algorithm='<algorithm>'".to_string(),
-                            ))?;
+                            let alg_end =
+                                prop[alg_pos + 11..].find("'").ok_or(SqlError::Parsing(
+                                    "Invalid algorithm syntax, expected algorithm='<algorithm>'"
+                                        .to_string(),
+                                ))?;
                             algorithm = &prop[alg_pos + 11..alg_pos + 11 + alg_end];
                         }
                         prop_start = i + 1;
@@ -1890,35 +2016,42 @@ fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::Compre
                 _ => {}
             }
         }
-        
+
         // 处理最后一个属性
         let last_prop = &comp_content[prop_start..].trim();
         if let Some(alg_pos) = last_prop.find("algorithm='") {
-            let alg_end = last_prop[alg_pos + 11..].find("'").ok_or(SqlError::Parsing(
-                "Invalid algorithm syntax, expected algorithm='<algorithm>'".to_string(),
-            ))?;
+            let alg_end = last_prop[alg_pos + 11..]
+                .find("'")
+                .ok_or(SqlError::Parsing(
+                    "Invalid algorithm syntax, expected algorithm='<algorithm>'".to_string(),
+                ))?;
             algorithm = &last_prop[alg_pos + 11..alg_pos + 11 + alg_end];
         }
-        
+
         // 设置压缩类型
         *compression_type = match algorithm {
             "delta-delta" => remdb::time_series::CompressionType::DeltaDelta,
             "delta" => remdb::time_series::CompressionType::Delta,
             "runlength" => remdb::time_series::CompressionType::RunLength,
             "delta-runlength" => remdb::time_series::CompressionType::DeltaRunLength,
-            _ => return Err(SqlError::Parsing(format!("Unsupported compression algorithm: {}", algorithm))),
+            _ => {
+                return Err(SqlError::Parsing(format!(
+                    "Unsupported compression algorithm: {}",
+                    algorithm
+                )));
+            }
         };
     }
     // 解析TTL属性
     else if attr_lower.starts_with("ttl = ") {
         let ttl_part = attr_lower.strip_prefix("ttl = ").unwrap();
         let ttl_value = ttl_part.trim_matches(|c| c == '\'' || c == '"');
-        
+
         // 解析TTL值，支持天、小时、分钟、秒
         let mut seconds = 0;
         let mut num_str = String::new();
         let mut unit = String::new();
-        
+
         for c in ttl_value.chars() {
             if c.is_digit(10) || c == '.' {
                 num_str.push(c);
@@ -1928,11 +2061,11 @@ fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::Compre
                 unit.push(c);
             }
         }
-        
-        let num = num_str.parse::<f64>().map_err(|_| SqlError::Parsing(
-            format!("Invalid TTL value: {}", ttl_value).to_string(),
-        ))?;
-        
+
+        let num = num_str.parse::<f64>().map_err(|_| {
+            SqlError::Parsing(format!("Invalid TTL value: {}", ttl_value).to_string())
+        })?;
+
         match unit.as_str() {
             "days" | "day" => seconds = (num * 24.0 * 3600.0) as u64,
             "hours" | "hour" => seconds = (num * 3600.0) as u64,
@@ -1940,10 +2073,10 @@ fn parse_with_attr(attr: &str, compression_type: &mut remdb::time_series::Compre
             "seconds" | "second" => seconds = num as u64,
             _ => return Err(SqlError::Parsing(format!("Unsupported TTL unit: {}", unit))),
         }
-        
+
         *retention_period_secs = seconds;
     }
-    
+
     Ok(())
 }
 
@@ -2184,27 +2317,36 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
                 remdb::ha::ReplicationMode::Sync => "Sync",
                 remdb::ha::ReplicationMode::Async => "Async",
             };
-            
+
             rows.push(vec![
                 "HA Service".to_string(),
                 "HEALTHY".to_string(),
                 format!("Enabled, Role: {}, Mode: {}", role, replication_mode).to_string(),
             ]);
-            
+
             // 添加HA配置详情
             rows.push(vec![
                 "HA Config".to_string(),
                 "HEALTHY".to_string(),
-                format!("Heartbeat: {}ms, Failure Detection: {}ms, Sync Timeout: {}ms", 
-                       ha_config.heartbeat_interval_ms, ha_config.failure_detection_ms, ha_config.sync_timeout_ms).to_string(),
+                format!(
+                    "Heartbeat: {}ms, Failure Detection: {}ms, Sync Timeout: {}ms",
+                    ha_config.heartbeat_interval_ms,
+                    ha_config.failure_detection_ms,
+                    ha_config.sync_timeout_ms
+                )
+                .to_string(),
             ]);
-            
+
             // 添加主节点信息（如果是从节点）
             if let Some(master_addr) = ha_config.master_address {
                 rows.push(vec![
                     "HA Master".to_string(),
                     "HEALTHY".to_string(),
-                    format!("Address: {}, Port: {:?}", master_addr, ha_config.master_port).to_string(),
+                    format!(
+                        "Address: {}, Port: {:?}",
+                        master_addr, ha_config.master_port
+                    )
+                    .to_string(),
                 ]);
             }
         }
@@ -2221,12 +2363,12 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
     // 注意：由于API限制，我们无法直接检查PubSub是否初始化成功
     // 这里采用以下策略：如果PubSub Server被配置为启用，我们显示HEALTHY
     // 否则显示DISABLED
-    
+
     // 检查PubSub服务是否已启用
     // 我们通过检查是否能获取任何主题ID来判断PubSub是否可用
     let mut pubsub_status = "DISABLED";
     let mut pubsub_details = "PubSub服务未启用";
-    
+
     // 检查是否能获取任何主题ID
     if let Some(_) = remdb::pubsub::get_topic_id("system") {
         pubsub_status = "HEALTHY";
@@ -2244,13 +2386,13 @@ fn execute_healthcheck(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
             pubsub_details = "PubSub服务已启用并正在运行";
         }
     }
-    
+
     rows.push(vec![
         "PubSub Server".to_string(),
         pubsub_status.to_string(),
         pubsub_details.to_string(),
     ]);
-    
+
     if pubsub_status == "HEALTHY" {
         // 添加PubSub配置详情
         rows.push(vec![

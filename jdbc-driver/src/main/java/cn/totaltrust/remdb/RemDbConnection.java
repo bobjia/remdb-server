@@ -5,8 +5,12 @@ import java.util.*;
 import java.util.concurrent.Executor;
 import java.io.*;
 import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
+import java.net.InetSocketAddress;
 
 public class RemDbConnection implements Connection {
+    private SocketChannel channel;
     private Socket socket;
     private PrintWriter writer;
     private BufferedReader reader;
@@ -14,12 +18,34 @@ public class RemDbConnection implements Connection {
     private boolean autoCommit = true;
     private boolean inTransaction = false;
     private int transactionIsolation = TRANSACTION_READ_COMMITTED;
+    private DirectBufferPool bufferPool;
+    private boolean zeroCopyEnabled = true;
 
     public RemDbConnection(String host, int port, String user, String password) throws SQLException {
         try {
-            this.socket = new Socket(host, port);
-            this.writer = new PrintWriter(socket.getOutputStream(), true);
-            this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            // 创建直接内存缓冲池（16个8KB缓冲区）
+            this.bufferPool = new DirectBufferPool(16, 8192);
+            
+            // 创建SocketChannel
+            this.channel = SocketChannel.open();
+            this.channel.configureBlocking(true);
+            
+            // 连接服务器
+            this.channel.connect(new InetSocketAddress(host, port));
+            this.socket = channel.socket();
+            
+            // 优化TCP参数
+            socket.setTcpNoDelay(true); // 禁用Nagle算法
+            socket.setKeepAlive(true);   // 启用TCP keepalive
+            socket.setReuseAddress(true); // 启用地址重用
+            
+            // 设置接收和发送缓冲区大小
+            socket.setReceiveBufferSize(65536);
+            socket.setSendBufferSize(65536);
+            
+            // 创建传统IO流（用于兼容现有文本协议）
+            this.writer = new PrintWriter(channel.socket().getOutputStream(), true);
+            this.reader = new BufferedReader(new InputStreamReader(channel.socket().getInputStream()));
             
             // Send AUTH command only if both username and password are non-empty
             if (!user.isEmpty() && !password.isEmpty()) {
@@ -124,7 +150,12 @@ public class RemDbConnection implements Connection {
                 writer.println("CLOSE");
                 reader.close();
                 writer.close();
+                channel.close();
                 socket.close();
+                
+                // 关闭并释放直接内存缓冲池
+                bufferPool.close();
+                
                 closed = true;
             } catch (IOException e) {
                 throw new SQLException("Failed to close connection: " + e.getMessage(), e);

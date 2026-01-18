@@ -35,13 +35,16 @@ pub fn write_log_to_file(message: &str) {
     }
 }
 
-
-
 #[macro_use]
 mod macros;
 #[macro_use]
 pub mod cli;
 mod ddl_compiler;
+pub mod handler;
 pub mod jdbc_server;
+pub mod network;
+pub mod pool;
+pub mod proto;
 mod snapshot_loader;
 mod sql_engine;
+pub mod tuning;

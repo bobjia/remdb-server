@@ -1,12 +1,16 @@
+use crate::handler::JdbcProtocolHandler;
+use crate::pool::HighPerfConnectionPool;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
+use crate::tuning::SystemTuner;
 use hex;
 use remdb::RemDb;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use std::sync::Mutex;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::time::Duration;
+use tracing::{error, info, warn};
 
 /// JDBC服务器
 pub struct JdbcServer {
@@ -18,6 +22,12 @@ pub struct JdbcServer {
     auth_enabled: bool,
     username: String,
     password_hash: String,
+    /// 高性能协议处理器
+    protocol_handler: Arc<JdbcProtocolHandler>,
+    /// 高性能连接池
+    connection_pool: Arc<HighPerfConnectionPool>,
+    /// 系统调优器
+    system_tuner: Arc<SystemTuner>,
 }
 
 impl JdbcServer {
@@ -31,6 +41,14 @@ impl JdbcServer {
         username: String,
         password_hash: String,
     ) -> Self {
+        // 获取CPU核心数作为工作线程数
+        let worker_count = num_cpus::get();
+
+        // 创建高性能组件
+        let protocol_handler = Arc::new(JdbcProtocolHandler::new(worker_count, db.clone()));
+        let connection_pool = Arc::new(HighPerfConnectionPool::new(max_connections));
+        let system_tuner = Arc::new(SystemTuner::new());
+
         Self {
             db,
             port,
@@ -39,244 +57,74 @@ impl JdbcServer {
             auth_enabled,
             username,
             password_hash,
+            protocol_handler,
+            connection_pool,
+            system_tuner,
         }
     }
 
     /// 启动JDBC服务器
     pub async fn start(&self) -> std::io::Result<()> {
+        // 暂时注释掉系统调优功能，待修复后重新启用
+        // let tuner_clone = self.system_tuner.clone();
+        // tokio::spawn(async move {
+        //     tuner_clone.start_auto_tuning().await;
+        // });
+
+        // 绑定TCP监听器
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port)).await?;
-        println!("JDBC server started on port {}", self.port);
-        println!("Maximum connections: {}", self.max_connections);
-        println!("SQL execution timeout: {} seconds", self.timeout);
+        info!("High-performance JDBC server started on port {}", self.port);
+        info!("Maximum connections: {}", self.max_connections);
+        info!("SQL execution timeout: {} seconds", self.timeout);
+        info!("Worker threads: {}", num_cpus::get());
 
         // 创建信号量来限制并发连接数
         let semaphore = Arc::new(Semaphore::new(self.max_connections));
-        let timeout = self.timeout;
 
         loop {
-            // 等待连接，获取信号量许可
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let (socket, addr) = listener.accept().await?;
-            println!("New JDBC connection from {}", addr);
+            tokio::select! {
+                // 接受新连接
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((socket, addr)) => {
+                            info!("New JDBC connection from: {}", addr);
 
-            let db = self.db.clone();
-            let conn_timeout = timeout;
-            let auth_enabled = self.auth_enabled;
-            let username = self.username.clone();
-            let password_hash = self.password_hash.clone();
+                            // 获取信号量许可
+                            let permit = semaphore.clone().acquire_owned().await.unwrap();
+                            let handler = self.protocol_handler.clone();
 
-            // 处理连接
-            tokio::spawn(async move {
-                // 连接处理完成后释放许可
-                let _permit = permit;
-                if let Err(e) = Self::handle_connection(
-                    socket,
-                    db,
-                    conn_timeout,
-                    auth_enabled,
-                    username,
-                    password_hash,
-                )
-                .await
-                {
-                    println!("JDBC connection error: {:?}", e);
-                }
-                println!("JDBC connection closed: {}", addr);
-            });
-        }
-    }
+                            // 处理连接
+                            tokio::spawn(async move {
+                                // 连接处理完成后释放许可
+                                let _permit = permit;
 
-    /// 处理JDBC连接
-    async fn handle_connection(
-        socket: tokio::net::TcpStream,
-        db: Arc<Mutex<&'static mut RemDb>>,
-        timeout: u64,
-        auth_enabled: bool,
-        username: String,
-        password_hash: String,
-    ) -> std::io::Result<()> {
-        println!("Handling new JDBC connection");
-        // 分离TCP流的读写部分，避免可变借用冲突
-        let (read_half, mut write_half) = tokio::io::split(socket);
-        let mut reader = tokio::io::BufReader::new(read_half);
-        let mut line = String::new();
+                                // 使用高性能协议处理器处理连接
+                                if let Err(e) = handler.handle_connection(socket).await {
+                                    error!("JDBC connection error: {:?}", e);
+                                }
 
-        // 认证状态跟踪
-        let mut is_authenticated = !auth_enabled; // 如果未启用认证，则默认已认证
-
-        loop {
-            // 读取客户端请求（完整的一行）
-            let bytes_read = reader.read_line(&mut line).await?;
-            if bytes_read == 0 {
-                println!("JDBC connection closed by client");
-                return Ok(());
-            }
-
-            let request = line.trim().to_string();
-            println!("JDBC request: {}", request);
-
-            // 处理请求
-            let response = Self::process_request(
-                request,
-                db.clone(),
-                timeout,
-                auth_enabled,
-                &mut is_authenticated,
-                &username,
-                &password_hash,
-            )
-            .await;
-            println!("JDBC response: {}", response);
-
-            // 发送响应
-            write_half.write_all(response.as_bytes()).await?;
-            write_half.write_all(b"\n").await?;
-            write_half.flush().await?;
-
-            // 清空行缓冲区
-            line.clear();
-        }
-    }
-
-    /// 处理JDBC请求
-    async fn process_request(
-        request: String,
-        db: Arc<Mutex<&'static mut RemDb>>,
-        timeout: u64,
-        auth_enabled: bool,
-        is_authenticated: &mut bool,
-        username: &str,
-        password_hash: &str,
-    ) -> String {
-        let parts: Vec<&str> = request.split('|').collect();
-        if parts.is_empty() {
-            return "ERROR|Invalid request format".to_string();
-        }
-
-        let command = parts[0];
-        match command {
-            "AUTH" => {
-                if parts.len() < 3 {
-                    return "ERROR|Missing username or password".to_string();
-                }
-                let provided_username = parts[1];
-                let provided_password = parts[2];
-
-                // 验证用户名和密码
-                if Self::verify_credentials(
-                    provided_username,
-                    provided_password,
-                    username,
-                    password_hash,
-                ) {
-                    *is_authenticated = true;
-                    "OK|Authentication successful".to_string()
-                } else {
-                    "ERROR|Authentication failed: Invalid username or password".to_string()
-                }
-            }
-            "EXECUTE" | "TIMESERIES_EXECUTE" | "TIMESERIES_QUERY" | "TIMESERIES_BATCH" => {
-                // 检查是否需要认证且已认证
-                if auth_enabled && !*is_authenticated {
-                    return "ERROR|Authentication required. Please send AUTH command first"
-                        .to_string();
-                }
-
-                if parts.len() < 2 {
-                    return "ERROR|Missing SQL statement".to_string();
-                }
-                let sql = parts[1];
-                Self::execute_sql(sql, db, timeout).await
-            }
-            "BEGIN" => {
-                // 检查是否需要认证且已认证
-                if auth_enabled && !*is_authenticated {
-                    return "ERROR|Authentication required. Please send AUTH command first"
-                        .to_string();
-                }
-                Self::begin_transaction(db).await
-            }
-            "COMMIT" => {
-                // 检查是否需要认证且已认证
-                if auth_enabled && !*is_authenticated {
-                    return "ERROR|Authentication required. Please send AUTH command first"
-                        .to_string();
-                }
-                Self::commit_transaction(db).await
-            }
-            "ROLLBACK" => {
-                // 检查是否需要认证且已认证
-                if auth_enabled && !*is_authenticated {
-                    return "ERROR|Authentication required. Please send AUTH command first"
-                        .to_string();
-                }
-                Self::rollback_transaction(db).await
-            }
-            "CLOSE" => "OK|Connection closed".to_string(),
-            _ => {
-                format!("ERROR|Unknown command: {}", command)
-            }
-        }
-    }
-
-    /// 执行SQL语句
-    async fn execute_sql(sql: &str, db: Arc<Mutex<&'static mut RemDb>>, timeout: u64) -> String {
-        println!("Executing SQL: {}", sql);
-        let start_time = std::time::Instant::now();
-
-        // 保存sql字符串的副本，因为它需要在spawn_blocking中使用
-        let sql_copy = sql.to_string();
-
-        // 创建一个新的Arc副本，以便在spawn_blocking中使用
-        let db_copy = db.clone();
-
-        // 使用spawn_blocking将同步的SQL执行包装起来，并设置配置的超时时间
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout),
-            tokio::task::spawn_blocking(move || {
-                // 在spawn_blocking内部获取数据库锁
-                let mut db_lock = db_copy.blocking_lock();
-                execute_extended_sql(&mut *db_lock, &sql_copy)
-            }),
-        )
-        .await;
-
-        let duration = start_time.elapsed();
-        println!("SQL execution took {:?}", duration);
-
-        match result {
-            Ok(join_result) => match join_result {
-                Ok(sql_result) => match sql_result {
-                    Ok(result_set) => {
-                        let formatted_result = Self::format_result_set(result_set);
-                        println!("Formatted result: {}", formatted_result);
-                        formatted_result
+                                info!("JDBC connection closed: {}", addr);
+                            });
+                        }
+                        Err(e) => {
+                            error!("Accept error: {}", e);
+                        }
                     }
-                    Err(err) => {
-                        let error_result = format!("ERROR|{:?}", err);
-                        println!("SQL error: {}", error_result);
-                        error_result
-                    }
-                },
-                Err(join_err) => {
-                    // 处理任务panic情况，返回更友好的错误信息
-                    let error_result = format!("ERROR|SQL execution failed: {:?}", join_err);
-                    println!("SQL task error: {}", error_result);
-                    error_result
                 }
-            },
-            Err(timeout_err) => {
-                let error_result = format!(
-                    "ERROR|SQL execution timeout after {} seconds: {:?}",
-                    timeout,
-                    timeout_err
-                );
-                println!("SQL timeout error: {}", error_result);
-                error_result
             }
         }
     }
-    
+
+    /// 获取系统调优器
+    pub fn get_system_tuner(&self) -> &SystemTuner {
+        &self.system_tuner
+    }
+
+    /// 获取连接池统计信息
+    pub fn get_pool_stats(&self) -> crate::pool::PoolStatsSnapshot {
+        self.connection_pool.get_stats()
+    }
+
     /// 验证用户名和密码
     pub fn verify_credentials(
         provided_username: &str,
@@ -299,90 +147,5 @@ impl JdbcServer {
 
         // 比较哈希值
         provided_hash_str == expected_password_hash
-    }
-
-    /// 格式化结果集
-    fn format_result_set(result_set: ResultSet) -> String {
-        if result_set.columns.is_empty() {
-            return format!("OK|{}|0|{}", result_set.affected_rows, "");
-        }
-
-        let columns = result_set.columns.join(",");
-        let mut rows = Vec::new();
-        for row in result_set.rows {
-            rows.push(row.join(","));
-        }
-        let rows_str = rows.join("; ");
-
-        format!(
-            "OK|{}|{}|{}|{}",
-            result_set.affected_rows,
-            result_set.columns.len(),
-            columns,
-            rows_str
-        )
-    }
-    
-    /// 开始事务
-    async fn begin_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
-        let result = tokio::task::spawn_blocking(move || {
-            let mut db_lock = db.blocking_lock();
-            unsafe {
-                db_lock.begin_transaction(
-                    remdb::transaction::TransactionType::ReadWrite,
-                    remdb::transaction::IsolationLevel::ReadCommitted,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    0
-                ).map(|_| ())
-            }
-        })
-        .await;
-
-        match result {
-            Ok(join_result) => match join_result {
-                Ok(_) => "OK|Transaction started".to_string(),
-                Err(err) => format!("ERROR|Failed to begin transaction: {:?}", err),
-            },
-            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
-        }
-    }
-    
-    /// 提交事务
-    async fn commit_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
-        let result = tokio::task::spawn_blocking(move || {
-            let mut db_lock = db.blocking_lock();
-            unsafe {
-                db_lock.commit_transaction()
-            }
-        })
-        .await;
-
-        match result {
-            Ok(join_result) => match join_result {
-                Ok(_) => "OK|Transaction committed".to_string(),
-                Err(err) => format!("ERROR|Failed to commit transaction: {:?}", err),
-            },
-            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
-        }
-    }
-    
-    /// 回滚事务
-    async fn rollback_transaction(db: Arc<Mutex<&'static mut RemDb>>) -> String {
-        let result = tokio::task::spawn_blocking(move || {
-            let mut db_lock = db.blocking_lock();
-            unsafe {
-                db_lock.rollback_transaction()
-            }
-        })
-        .await;
-
-        match result {
-            Ok(join_result) => match join_result {
-                Ok(_) => "OK|Transaction rolled back".to_string(),
-                Err(err) => format!("ERROR|Failed to rollback transaction: {:?}", err),
-            },
-            Err(join_err) => format!("ERROR|Task join error: {:?}", join_err),
-        }
     }
 }

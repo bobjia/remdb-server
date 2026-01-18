@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package jdbc;
+
+// JDBC请求协议
+message JdbcRequest {
+  uint64 request_id = 1;
+  oneof request {
+    ConnectionRequest connection = 2;
+    StatementRequest statement = 3;
+    PrepareRequest prepare = 4;
+    ExecuteRequest execute = 5;
+    QueryRequest query = 6;
+    BatchRequest batch = 7;
+    BeginTransaction begin_transaction = 8;
+    CommitTransaction commit_transaction = 9;
+    RollbackTransaction rollback_transaction = 10;
+  }
+}
+
+// JDBC响应协议  
+message JdbcResponse {
+  uint64 request_id = 1;
+  Status status = 2;
+  string error_message = 3;
+  oneof response {
+    ConnectionResponse connection = 4;
+    ResultSetResponse result_set = 5;
+    UpdateResponse update = 6;
+    MetadataResponse metadata = 7;
+    TransactionResponse transaction = 8;
+  }
+}
+
+// 状态枚举
+enum Status {
+  OK = 0;
+  ERROR = 1;
+  TIMEOUT = 2;
+  UNAUTHORIZED = 3;
+  SERVER_ERROR = 4;
+}
+
+// 连接请求
+message ConnectionRequest {
+  string username = 1;
+  string password = 2;
+  string database = 3;
+  uint32 fetch_size = 4;
+  bool auto_commit = 5;
+}
+
+// 连接响应
+message ConnectionResponse {
+  uint64 connection_id = 1;
+  string server_version = 2;
+  uint32 protocol_version = 3;
+}
+
+// 语句请求
+message StatementRequest {
+  string sql = 1;
+}
+
+// 预编译请求
+message PrepareRequest {
+  string sql = 1;
+}
+
+// 执行请求
+message ExecuteRequest {
+  uint64 statement_id = 1;
+  repeated Value parameters = 2;
+}
+
+// 查询请求
+message QueryRequest {
+  string sql = 1;
+  repeated Value parameters = 2;
+  uint32 fetch_size = 3;
+  bool use_cursor = 4;
+}
+
+// 批处理请求
+message BatchRequest {
+  repeated string sql_statements = 1;
+  repeated ParameterBatch parameter_batches = 2;
+}
+
+// 参数批处理
+message ParameterBatch {
+  repeated Value parameters = 1;
+}
+
+// 值类型
+message Value {
+  oneof value {
+    bool boolean_value = 1;
+    int32 int32_value = 2;
+    int64 int64_value = 3;
+    float float_value = 4;
+    double double_value = 5;
+    string string_value = 6;
+    bytes bytes_value = 7;
+    uint64 uint64_value = 8;
+    sint64 sint64_value = 9;
+    fixed32 fixed32_value = 10;
+    fixed64 fixed64_value = 11;
+    sfixed32 sfixed32_value = 12;
+    sfixed64 sfixed64_value = 13;
+    bytes date_value = 14;
+    bytes time_value = 15;
+    bytes timestamp_value = 16;
+    bool null_value = 17;
+  }
+}
+
+// 结果集响应
+message ResultSetResponse {
+  repeated ColumnMetadata columns = 1;
+  repeated RowData rows = 2;
+  uint64 row_count = 3;
+  bool has_more_rows = 4;
+}
+
+// 列元数据
+message ColumnMetadata {
+  string name = 1;
+  DataType type = 2;
+  uint32 precision = 3;
+  uint32 scale = 4;
+  bool nullable = 5;
+  bool primary_key = 6;
+}
+
+// 数据类型枚举
+enum DataType {
+  NULL = 0;
+  BOOLEAN = 1;
+  TINYINT = 2;
+  SMALLINT = 3;
+  INTEGER = 4;
+  BIGINT = 5;
+  FLOAT = 6;
+  DOUBLE = 7;
+  DECIMAL = 8;
+  CHAR = 9;
+  VARCHAR = 10;
+  DATE = 11;
+  TIME = 12;
+  TIMESTAMP = 13;
+  BINARY = 14;
+  VARBINARY = 15;
+  CLOB = 16;
+  BLOB = 17;
+  ARRAY = 18;
+  STRUCT = 19;
+  REF = 20;
+  DATALINK = 21;
+  BOOLEAN_ARRAY = 22;
+  INT_ARRAY = 23;
+  LONG_ARRAY = 24;
+  FLOAT_ARRAY = 25;
+  DOUBLE_ARRAY = 26;
+  STRING_ARRAY = 27;
+}
+
+// 行数据
+message RowData {
+  repeated Value values = 1;
+}
+
+// 更新响应
+message UpdateResponse {
+  uint64 affected_rows = 1;
+  uint64 last_insert_id = 2;
+}
+
+// 元数据响应
+message MetadataResponse {
+  repeated TableMetadata tables = 1;
+}
+
+// 表元数据
+message TableMetadata {
+  string name = 1;
+  repeated ColumnMetadata columns = 2;
+  repeated string primary_key_columns = 3;
+}
+
+// 事务相关消息
+message BeginTransaction {
+  TransactionType type = 1;
+  IsolationLevel isolation_level = 2;
+}
+
+message CommitTransaction {
+}
+
+message RollbackTransaction {
+}
+
+message TransactionResponse {
+  uint64 transaction_id = 1;
+}
+
+// 事务类型
+enum TransactionType {
+  READ_WRITE = 0;
+  READ_ONLY = 1;
+}
+
+// 隔离级别
+enum IsolationLevel {
+  READ_UNCOMMITTED = 0;
+  READ_COMMITTED = 1;
+  REPEATABLE_READ = 2;
+  SERIALIZABLE = 3;
+}
+
+// 无锁数据访问协议
+message LockFreeAccess {
+  uint64 snapshot_id = 1;  // 快照ID用于MVCC
+  repeated uint64 partition_keys = 2;
+  bool read_only = 3;
+}
+
+// 零拷贝数据传输
+message ZeroCopyData {
+  bytes descriptor = 1;  // 内存区域描述符
+  uint64 offset = 2;
+  uint64 length = 3;
+  uint32 compression = 4;  // 0=none, 1=lz4, 2=zstd
+}
