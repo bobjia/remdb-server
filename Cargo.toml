@@ -75,7 +75,8 @@ warp = "0.3.6"
 rayon = "1.8.0"
 
 # 系统调用
-nix = "0.28.0"
+nix = { version = "0.28.0", features = ["user"] }
+libc = "0.2"
 
 [build-dependencies]
 prost-build = "0.12"

@@ -1758,6 +1758,7 @@ dependencies = [
  "flume",
  "futures",
  "hex",
+ "libc",
  "log",
  "lz4",
  "metrics",

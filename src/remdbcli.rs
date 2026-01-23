@@ -422,8 +422,28 @@ fn value_to_string(value: &Value) -> String {
         Some(value::Value::DateValue(v)) => format!("date[{:?}]", v),
         Some(value::Value::TimeValue(v)) => format!("time[{:?}]", v),
         Some(value::Value::TimestampValue(v)) => format!("timestamp[{:?}]", v),
+        Some(value::Value::VectorData(v)) => format_vector_data(v),
         Some(value::Value::NullValue(_)) => "NULL".to_string(),
         None => "NULL".to_string(),
+    }
+}
+
+// 处理向量数据，转换为字符串
+fn format_vector_data(vector_data: &VectorData) -> String {
+    if !vector_data.values.is_empty() {
+        // 使用float值
+        let values: Vec<String> = vector_data.values.iter()
+            .map(|v| format!("{:.4}", v))
+            .collect();
+        format!("vector[{}]", values.join(", "))
+    } else if !vector_data.double_values.is_empty() {
+        // 使用double值
+        let values: Vec<String> = vector_data.double_values.iter()
+            .map(|v| format!("{:.4}", v))
+            .collect();
+        format!("vector[{}]", values.join(", "))
+    } else {
+        "vector[]".to_string()
     }
 }
 
