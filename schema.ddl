@@ -56,3 +56,5 @@ insert into users (name, email, age, created_at) values ("bob12", "a", 4,111114)
 insert into users (name, email, age, created_at) values ("bob13", "a", 4,111114);
 insert into users (name, email, age, created_at) values ("bob14", "a", 4,111114);
 insert into users (name, email, age, created_at) values ("bob15", "a", 4,111114);
+
+CREATE TABLE products_vec (    id INT32 PRIMARY KEY,    name TEXT,    embedding VECTOR(4) WITH DISTANCE=IP)

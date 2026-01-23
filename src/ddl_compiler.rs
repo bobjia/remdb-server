@@ -354,6 +354,10 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
                     interval: remdb::types::db_interval::new(interval_val, 6, 0),
                 })
             }
+            DataType::Vector => {
+                // 向量类型暂不支持默认值
+                None
+            }
         };
 
         default_value = parsed_default;
@@ -519,6 +523,7 @@ fn create_table_def(
             unique: col.unique,
             auto_increment: col.auto_increment,
             default_value: col.default_value,
+            vector_metadata: None,
         };
 
         field_defs.push(field_def);

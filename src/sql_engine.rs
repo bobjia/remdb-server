@@ -384,6 +384,10 @@ fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<Res
                                         core::str::from_utf8(&value.value.string).unwrap_or("");
                                     string_slice.trim_end_matches(char::from(0)).to_string()
                                 }
+                                remdb::types::DataType::Vector => {
+                                    // 向量类型转换为字符串表示
+                                    format!("[VECTOR]")
+                                }
                             }
                         }
                     })
@@ -709,6 +713,10 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                         core::str::from_utf8(&value.value.string).unwrap_or("");
                                     string_slice.trim_end_matches(char::from(0)).to_string()
                                 }
+                                remdb::types::DataType::Vector => {
+                                    // 向量类型转换为字符串表示
+                                    format!("[VECTOR]")
+                                }
                             }
                         }
                     }
@@ -733,6 +741,10 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                             let string_slice =
                                 core::str::from_utf8(&value.value.string).unwrap_or("");
                             string_slice.trim_end_matches(char::from(0)).to_string()
+                        }
+                        remdb::types::DataType::Vector => {
+                            // 向量类型转换为字符串表示
+                            format!("[VECTOR]")
                         }
                     }
                 }
@@ -1483,8 +1495,22 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                             let field_name = field_parts[0];
                             let data_type_str = field_parts[1].to_uppercase();
 
+                            // 解析数据类型，处理带括号的类型如VECTOR(128)
+                            let data_type_str_full = field_parts[1].to_uppercase();
+                            let base_type_str: &str;
+                            let dimension: i32;
+                            if let Some(open_paren) = data_type_str_full.find('(') {
+                                base_type_str = &data_type_str_full[..open_paren];
+                                let close_paren = data_type_str_full.rfind(')').unwrap_or(data_type_str_full.len());
+                                let dim_str = &data_type_str_full[open_paren + 1..close_paren];
+                                dimension = dim_str.parse().unwrap_or(0);
+                            } else {
+                                base_type_str = &data_type_str_full;
+                                dimension = 0;
+                            }
+
                             // 转换数据类型
-                            let data_type = match data_type_str.as_str() {
+                            let data_type = match base_type_str {
                                 "INT" | "INTEGER" => remdb::types::DataType::Int32,
                                 "BIGINT" => remdb::types::DataType::Int64,
                                 "FLOAT" => remdb::types::DataType::Float32,
@@ -1492,6 +1518,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                 "BOOLEAN" => remdb::types::DataType::Bool,
                                 "TIMESTAMP" => remdb::types::DataType::Timestamp,
                                 "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                                "VECTOR" => remdb::types::DataType::Vector,
                                 _ => remdb::types::DataType::String, // 默认使用String类型
                             };
 
@@ -1578,7 +1605,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                 };
                             }
 
-                            fields.push((field_name, data_type, default_value)); // 添加带有默认值的字段
+                            fields.push((field_name, data_type, dimension, default_value)); // 添加带有维度和默认值的字段
 
                             // 检查约束
                             let mut is_primary_key = false;
@@ -1634,8 +1661,22 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
             let field_name = field_parts[0];
             let data_type_str = field_parts[1].to_uppercase();
 
+            // 解析数据类型，处理带括号的类型如VECTOR(128)
+            let data_type_str_full = field_parts[1].to_uppercase();
+            let base_type_str: &str;
+            let dimension: i32;
+            if let Some(open_paren) = data_type_str_full.find('(') {
+                base_type_str = &data_type_str_full[..open_paren];
+                let close_paren = data_type_str_full.rfind(')').unwrap_or(data_type_str_full.len());
+                let dim_str = &data_type_str_full[open_paren + 1..close_paren];
+                dimension = dim_str.parse().unwrap_or(0);
+            } else {
+                base_type_str = &data_type_str_full;
+                dimension = 0;
+            }
+
             // 转换数据类型
-            let data_type = match data_type_str.as_str() {
+            let data_type = match base_type_str {
                 "INT" | "INTEGER" => remdb::types::DataType::Int32,
                 "BIGINT" => remdb::types::DataType::Int64,
                 "FLOAT" => remdb::types::DataType::Float32,
@@ -1643,6 +1684,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 "BOOLEAN" => remdb::types::DataType::Bool,
                 "TIMESTAMP" => remdb::types::DataType::Timestamp,
                 "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                "VECTOR" => remdb::types::DataType::Vector,
                 _ => remdb::types::DataType::String, // 默认使用String类型
             };
 
@@ -1723,7 +1765,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 };
             }
 
-            fields.push((field_name, data_type, default_value)); // 添加带有默认值的字段
+            fields.push((field_name, data_type, dimension, default_value)); // 添加带有维度和默认值的字段
 
             // 检查约束
             let mut is_primary_key = false;
@@ -1767,11 +1809,21 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         primary_key_index = Some(0);
     }
 
+    // 转换fields为create_table方法期望的类型：(&str, DataType, u16, Option<DistanceType>, Option<Value>)
+    // u16: 向量维度（非向量类型默认为0）
+    // Option<DistanceType>: 向量距离类型（非向量类型默认为None）
+    let converted_fields: Vec<(&str, remdb::types::DataType, u16, Option<remdb::types::DistanceType>, Option<remdb::types::Value>)> = fields
+        .iter()
+        .map(|(name, data_type, dimension, default)| {
+            (*name, *data_type, *dimension as u16, None, *default)
+        })
+        .collect();
+
     // 调用 DdlExecutor::create_table 方法创建表，传递约束信息
     remdb::DdlExecutor::create_table(
         db,
         &table_name,
-        &fields,
+        &converted_fields,
         Some(&constraints),
         primary_key_index,
     )?;
@@ -2099,7 +2151,7 @@ fn execute_create_index(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     let index_name_end = after_create
         .find(" on ")
         .ok_or(SqlError::Parsing("Missing ON keyword".to_string()))?;
-    let index_name = after_create[..index_name_end].trim().to_string();
+    let _index_name = after_create[..index_name_end].trim().to_string();
 
     // 提取表名
     let after_on = &after_create[index_name_end + 4..];
@@ -2441,6 +2493,7 @@ fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<Resu
                 remdb::types::DataType::TimestampTZ => "TIMESTAMPTZ".to_string(),
                 remdb::types::DataType::Interval => "INTERVAL".to_string(),
                 remdb::types::DataType::String => format!("VARCHAR({})", field.size),
+                remdb::types::DataType::Vector => "VECTOR".to_string(),
             };
 
             // 生成列定义行
