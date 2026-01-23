@@ -112,7 +112,14 @@ message Value {
     bytes time_value = 15;
     bytes timestamp_value = 16;
     bool null_value = 17;
+    VectorData vector_data = 18;
   }
+}
+
+// 向量数据
+message VectorData {
+  repeated float values = 1;
+  repeated double double_values = 2;
 }
 
 // 结果集响应
@@ -163,6 +170,9 @@ enum DataType {
   FLOAT_ARRAY = 25;
   DOUBLE_ARRAY = 26;
   STRING_ARRAY = 27;
+  VECTOR = 28;
+  VECTOR_FLOAT = 29;
+  VECTOR_DOUBLE = 30;
 }
 
 // 行数据

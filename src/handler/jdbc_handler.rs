@@ -493,11 +493,42 @@ impl JdbcProtocolHandler {
         for row in result_set.rows {
             let mut values = Vec::new();
             for value in row {
-                // 转换值
-                let val = Value {
-                    value: Some(value::Value::StringValue(value)),
-                };
-                values.push(val);
+                // 检查是否是向量值
+                if value.starts_with('[') && value.ends_with(']') {
+                    // 这是一个向量值，尝试解析为float数组
+                    let vector_str = &value[1..value.len()-1];
+                    let elements: Vec<&str> = vector_str.split(',').map(|s| s.trim()).collect();
+                    let mut float_values = Vec::new();
+                    let mut double_values = Vec::new();
+                    let mut is_double = false;
+                    
+                    // 尝试解析元素
+                    for elem in elements {
+                        if let Ok(f) = elem.parse::<f32>() {
+                            float_values.push(f);
+                        } else if let Ok(d) = elem.parse::<f64>() {
+                            double_values.push(d);
+                            is_double = true;
+                        }
+                    }
+                    
+                    // 根据解析结果创建向量数据
+                    let vector_data = VectorData {
+                        values: if is_double { Vec::new() } else { float_values },
+                        double_values: if is_double { double_values } else { Vec::new() },
+                    };
+                    
+                    let val = Value {
+                        value: Some(value::Value::VectorData(vector_data)),
+                    };
+                    values.push(val);
+                } else {
+                    // 普通字符串值
+                    let val = Value {
+                        value: Some(value::Value::StringValue(value)),
+                    };
+                    values.push(val);
+                }
             }
             let row_data = RowData { values };
             rows.push(row_data);

@@ -1023,9 +1023,121 @@ public class RemDbResultSet implements ResultSet {
                 // 如果不是数字，尝试从字符串格式解析
                 return type.cast(Timestamp.valueOf(value));
             }
+        } else if (type == float[].class || type == Float[].class) {
+            // 处理向量类型，从字符串解析为float数组
+            return type.cast(parseVectorToFloatArray(value));
+        } else if (type == double[].class || type == Double[].class) {
+            // 处理向量类型，从字符串解析为double数组
+            return type.cast(parseVectorToDoubleArray(value));
         } else {
             throw new SQLException("Unsupported type: " + type.getName());
         }
+    }
+    
+    /**
+     * 将向量字符串解析为float数组
+     */
+    private float[] parseVectorToFloatArray(String vectorStr) throws SQLException {
+        if (vectorStr == null || vectorStr.isEmpty() || vectorStr.equals("NULL")) {
+            return null;
+        }
+        
+        // 处理可能的特殊情况
+        String trimmedStr = vectorStr.trim();
+        
+        // 检查是否是向量格式
+        if (!trimmedStr.startsWith("[") || !trimmedStr.endsWith("]")) {
+            // 不是向量格式，可能是其他表示形式，直接返回null
+            return null;
+        }
+        
+        // 移除首尾括号
+        String content = trimmedStr.substring(1, trimmedStr.length() - 1).trim();
+        
+        if (content.isEmpty()) {
+            return new float[0];
+        }
+        
+        // 分割向量元素
+        String[] elements = content.split(",");
+        float[] result = new float[elements.length];
+        
+        for (int i = 0; i < elements.length; i++) {
+            try {
+                String element = elements[i].trim();
+                // 处理可能的格式化问题
+                element = element.replaceAll("[\"'\\[\\]]", ""); // 移除所有引号和括号
+                element = element.replaceAll("\\s+", ""); // 移除所有空格
+                
+                if (element.isEmpty()) {
+                    result[i] = 0.0f;
+                } else {
+                    result[i] = Float.parseFloat(element);
+                }
+            } catch (NumberFormatException e) {
+                // 详细的错误信息，帮助调试
+                throw new SQLException(
+                    String.format("Failed to parse vector element at index %d. " +
+                                "Vector string: %s, Content: %s, Element: %s", 
+                                i, vectorStr, content, elements[i]), 
+                    e);
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 将向量字符串解析为double数组
+     */
+    private double[] parseVectorToDoubleArray(String vectorStr) throws SQLException {
+        if (vectorStr == null || vectorStr.isEmpty() || vectorStr.equals("NULL")) {
+            return null;
+        }
+        
+        // 处理可能的特殊情况
+        String trimmedStr = vectorStr.trim();
+        
+        // 检查是否是向量格式
+        if (!trimmedStr.startsWith("[") || !trimmedStr.endsWith("]")) {
+            // 不是向量格式，可能是其他表示形式，直接返回null
+            return null;
+        }
+        
+        // 移除首尾括号
+        String content = trimmedStr.substring(1, trimmedStr.length() - 1).trim();
+        
+        if (content.isEmpty()) {
+            return new double[0];
+        }
+        
+        // 分割向量元素
+        String[] elements = content.split(",");
+        double[] result = new double[elements.length];
+        
+        for (int i = 0; i < elements.length; i++) {
+            try {
+                String element = elements[i].trim();
+                // 处理可能的格式化问题
+                element = element.replaceAll("[\"'\\[\\]]", ""); // 移除所有引号和括号
+                element = element.replaceAll("\\s+", ""); // 移除所有空格
+                
+                if (element.isEmpty()) {
+                    result[i] = 0.0;
+                } else {
+                    result[i] = Double.parseDouble(element);
+                }
+            } catch (NumberFormatException e) {
+                // 详细的错误信息，帮助调试
+                throw new SQLException(
+                    String.format("Failed to parse vector element at index %d. " +
+                                "Vector string: %s, Content: %s, Element: %s", 
+                                i, vectorStr, content, elements[i]), 
+                    e);
+            }
+        }
+        
+        return result;
     }
 
     @Override
