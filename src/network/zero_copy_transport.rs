@@ -54,7 +54,8 @@ impl ZeroCopyTransport {
         Self {
             inner: socket,
             buffer_pool: BufferPool::new(16, 8192), // 16个8KB缓冲区
-            zero_copy_enabled: cfg!(target_os = "linux"),
+            // 在Linux和Windows平台上都启用零拷贝优化
+            zero_copy_enabled: cfg!(target_os = "linux") || cfg!(target_os = "windows"),
         }
     }
 
@@ -109,6 +110,7 @@ impl ZeroCopyTransport {
         // 禁用Nagle算法，适用于所有平台
         self.inner.set_nodelay(true)?;
 
+        // TCP_QUICKACK仅在Linux平台上支持
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::io::AsRawFd;

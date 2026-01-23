@@ -80,3 +80,7 @@ libc = "0.2"
 
 [build-dependencies]
 prost-build = "0.12"
+
+[features]
+# 零拷贝网络传输支持
+zerocopy = []
