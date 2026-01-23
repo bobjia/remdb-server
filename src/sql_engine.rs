@@ -744,7 +744,80 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                         }
                         remdb::types::DataType::Vector => {
                             // 向量类型转换为字符串表示
-                            format!("[VECTOR]")
+                            // 提取表名
+                            let table_name_start = sql_lower.find("from ").map(|pos| pos + 5).unwrap_or(0);
+                            let table_name_end = sql_lower[table_name_start..]
+                                .find(|c: char| c.is_whitespace() || c == ';' || c == ')' || c == ',')
+                                .unwrap_or_else(|| sql_lower[table_name_start..].len());
+                            let table_name_str = &sql_lower[table_name_start..table_name_start + table_name_end];
+                            
+                            // 遍历所有表ID，查找实际表
+                            let mut found_table = None;
+                            let max_table_id = 100; // 安全上限，防止无限循环
+                            
+                            for table_id in 0..max_table_id {
+                                if let Ok(table) = db.get_table(table_id) {
+                                    if table.def.name == table_name_str {
+                                        found_table = Some(table);
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if let Some(table) = found_table {
+                                if val_idx < table.def.fields.len() {
+                                    let field = &table.def.fields[val_idx];
+                                    if let Some(meta) = &field.vector_metadata {
+                                        let vector_ptr = value.value.vector;
+                                        if !vector_ptr.is_null() {
+                                            // 构建向量字符串，显示前几个和后几个元素
+                                            let dimension = meta.dimension as usize;
+                                            let mut vec_str = String::from("[");
+                                            
+                                            // 显示前3个元素
+                                            for i in 0..core::cmp::min(3, dimension) {
+                                                if i > 0 {
+                                                    vec_str.push_str(", ");
+                                                }
+                                                let val = *vector_ptr.add(i);
+                                                vec_str.push_str(&format!("{:.4}", val));
+                                            }
+                                            
+                                            // 如果向量很长，显示省略号
+                                            if dimension > 6 {
+                                                vec_str.push_str(", ..., ");
+                                                
+                                                // 显示后3个元素
+                                                for i in (dimension - 3)..dimension {
+                                                    if i > dimension - 3 {
+                                                        vec_str.push_str(", ");
+                                                    }
+                                                    let val = *vector_ptr.add(i);
+                                                    vec_str.push_str(&format!("{:.4}", val));
+                                                }
+                                            } else if dimension > 3 {
+                                                // 显示中间的元素
+                                                for i in 3..dimension {
+                                                    vec_str.push_str(", ");
+                                                    let val = *vector_ptr.add(i);
+                                                    vec_str.push_str(&format!("{:.4}", val));
+                                                }
+                                            }
+                                            
+                                            vec_str.push_str("]");
+                                            vec_str
+                                        } else {
+                                            format!("[null]")
+                                        }
+                                    } else {
+                                        format!("[VECTOR]")
+                                    }
+                                } else {
+                                    format!("[VECTOR]")
+                                }
+                            } else {
+                                format!("[VECTOR]")
+                            }
                         }
                     }
                 }
