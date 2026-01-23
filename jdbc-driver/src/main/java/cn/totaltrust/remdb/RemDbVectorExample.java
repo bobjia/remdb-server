@@ -118,7 +118,7 @@ public class RemDbVectorExample {
                 System.err.println("错误：无法连接到RemDB服务器！");
                 System.err.println("请确保：");
                 System.err.println("1. RemDB服务器已启动");
-                System.err.println("2. 服务器正在端口8080上运行");
+                System.err.println("2. 服务器正在端口6666上运行");
                 System.err.println("3. 服务器允许来自本地的连接");
             } else {
                 System.err.println("SQL错误：" + e.getMessage());

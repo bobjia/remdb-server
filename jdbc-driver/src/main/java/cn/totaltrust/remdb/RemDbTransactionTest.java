@@ -5,8 +5,8 @@ import java.sql.*;
 public class RemDbTransactionTest {
     public static void main(String[] args) {
         String url = "jdbc:remdb://localhost:6666";
-        String user = "";
-        String password = "";
+        String user = "root";
+        String password = "admin";
 
         Connection conn = null;
         Statement stmt = null;
