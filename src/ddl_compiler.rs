@@ -495,18 +495,24 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
 
 /// 创建表定义
 fn create_table_def(
-    table_id: usize,
-    name: &'static str,
+    table_id: u16,
+    name: &str,
     columns: &[DdlColumn],
 ) -> std::result::Result<TableDef, DdlError> {
-    // 找到主键
-    let primary_key = columns
+    // 找到所有主键字段的索引
+    let primary_keys: Vec<usize> = columns
         .iter()
-        .position(|col| col.primary_key)
-        .ok_or(DdlError::Parsing(format!(
+        .enumerate()
+        .filter(|(_, col)| col.primary_key)
+        .map(|(index, _)| index)
+        .collect();
+
+    if primary_keys.is_empty() {
+        return Err(DdlError::Parsing(format!(
             "No primary key found for table: {}",
             name
-        )))?;
+        )));
+    }
 
     // 计算字段偏移量
     let mut offset = 0;
@@ -514,7 +520,7 @@ fn create_table_def(
 
     for col in columns {
         let field_def = FieldDef {
-            name: col.name,
+            name: col.name.to_string(),
             data_type: col.data_type,
             size: col.size,
             offset,
@@ -522,7 +528,7 @@ fn create_table_def(
             primary_key: col.primary_key,
             unique: col.unique,
             auto_increment: col.auto_increment,
-            default_value: col.default_value,
+            default_value: col.default_value.clone(),
             vector_metadata: None,
         };
 
@@ -530,18 +536,24 @@ fn create_table_def(
         offset += col.size;
     }
 
-    // 转换为静态字段定义数组
-    let field_defs_static = Box::leak(Box::new(field_defs));
+    // 获取当前时间戳（秒）
+    let current_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     Ok(TableDef {
         id: table_id as u8,
-        name,
-        fields: field_defs_static,
-        primary_key,
+        name: name.to_string(),
+        fields: field_defs,
+        primary_key: primary_keys,
         secondary_index: None,
         secondary_index_type: remdb::types::IndexType::BTree,
         record_size: offset,
         max_records: 1000, // 允许1000条记录，支持多个记录
+        version: 1, // 初始版本号为1
+        created_at: current_timestamp,
+        updated_at: current_timestamp,
     })
 }
 

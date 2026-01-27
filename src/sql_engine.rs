@@ -380,9 +380,11 @@ fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<Res
                                 }
                                 remdb::types::DataType::Interval => format!("{}", value.value.u64),
                                 remdb::types::DataType::String => {
-                                    let string_slice =
-                                        core::str::from_utf8(&value.value.string).unwrap_or("");
-                                    string_slice.trim_end_matches(char::from(0)).to_string()
+                                    // 正确处理字符串类型，确保空值也能正确显示
+                                    let string_slice = unsafe {
+                                        core::str::from_utf8_unchecked(&value.value.string)
+                                    };
+                                    string_slice.trim_end_matches(char::from(0)).trim().to_string()
                                 }
                                 remdb::types::DataType::Vector => {
                                     // 向量类型转换为字符串表示
@@ -1888,17 +1890,20 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     let converted_fields: Vec<(&str, remdb::types::DataType, u16, Option<remdb::types::DistanceType>, Option<remdb::types::Value>)> = fields
         .iter()
         .map(|(name, data_type, dimension, default)| {
-            (*name, *data_type, *dimension as u16, None, *default)
+            (*name, *data_type, *dimension as u16, None, default.clone())
         })
         .collect();
 
+    // 转换 primary_key_index 为 Option<Vec<usize>> 类型，以支持复合主键
+    let primary_key_vec = primary_key_index.map(|index| vec![index]);
+    
     // 调用 DdlExecutor::create_table 方法创建表，传递约束信息
     remdb::DdlExecutor::create_table(
         db,
         &table_name,
         &converted_fields,
         Some(&constraints),
-        primary_key_index,
+        primary_key_vec,
     )?;
 
     // 构造结果集
@@ -2543,7 +2548,7 @@ fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<Resu
         .map_err(|e| SqlError::Parsing(format!("Failed to create file: {}", e)))?;
 
     // 遍历所有表定义
-    for table in db.config.tables {
+    for table in &db.config.tables {
         // 生成CREATE TABLE语句
         let mut create_table_sql = format!("CREATE TABLE {} (\n", table.name);
 
@@ -2578,7 +2583,7 @@ fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<Resu
             }
 
             // 添加PRIMARY KEY约束
-            if i == table.primary_key {
+            if table.primary_key.contains(&i) {
                 column_def.push_str(" PRIMARY KEY");
             }
 
@@ -2662,9 +2667,9 @@ fn execute_export_all(
     execute_export_ddl(db, &ddl_file)?;
 
     // 导出每个表的数据
-    for table in db.config.tables {
+    for table in &db.config.tables {
         let data_file = format!("{}/{}.csv", output_dir, table.name);
-        execute_export_data(db, table.name, &data_file)?;
+        execute_export_data(db, &table.name, &data_file)?;
     }
 
     // 返回成功结果

@@ -410,6 +410,9 @@ struct Config {
     /// JDBC认证密码哈希值
     jdbc_password_hash: Option<String>,
 
+    /// DDL文件路径
+    ddl_path: Option<String>,
+
     /// pubsub配置
     pubsub: Option<PubSubConfig>,
 
@@ -859,15 +862,31 @@ async fn main() {
     remdb::platform::init_platform(&WINDOWS_PLATFORM);
     log_println!("Platform initialized manually");
 
-    // DDL文件现在通过remdbcli的source指令执行，不再在启动时处理
-    let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = (Vec::new(), Vec::new());
+    // 尝试从config中获取ddl_path，如果存在则加载
+    let ddl_path = config.ddl_path.as_deref().unwrap_or("");
+    let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = if !ddl_path.is_empty() {
+        log_println!("Loading DDL file: {}", ddl_path);
+        match ddl_compiler::compile_ddl_file(ddl_path) {
+            Ok(result) => {
+                log_println!("✓ DDL file loaded successfully, {} tables created", result.0.len());
+                result
+            },
+            Err(err) => {
+                log_eprintln!("Warning: Failed to load DDL file: {}, using empty tables", err);
+                (Vec::new(), Vec::new())
+            }
+        }
+    } else {
+        // 没有配置DDL文件，使用空表列表
+        (Vec::new(), Vec::new())
+    };
 
     // 创建默认内存分配器
     static mut DEFAULT_ALLOCATOR: remdb::config::DefaultMemoryAllocator =
         remdb::config::DefaultMemoryAllocator;
 
-    // 首先将tables向量泄漏到静态内存，确保TableDef有'static生命周期
-    let static_tables = Box::leak(Box::new(tables));
+    // 直接使用tables向量，不需要泄漏到静态内存
+    let static_tables = tables;
 
     // 解析高可用配置
     let ha_enabled = ha_enabled.unwrap_or(false);
