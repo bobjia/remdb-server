@@ -1,0 +1,311 @@
+# RemDB Python Bindings
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-green.svg)](https://www.python.org/downloads/)
+
+Python bindings for RemDB, a lightweight embedded database optimized for resource-constrained environments.
+
+## Features
+
+- **Lightweight**: Minimal memory footprint and dependencies
+- **High Performance**: Direct memory access with zero-copy support
+- **Easy to Use**: Intuitive object-oriented API with context manager support
+- **Transaction Support**: ACID-compliant transactions
+- **SQL Support**: Execute SQL queries directly
+- **NumPy Integration**: Efficient data exchange with NumPy arrays
+- **Pandas Integration**: Seamless integration with Pandas DataFrames
+- **Advanced Query**: Vector similarity search and hybrid search (vector + scalar)
+- **AI Integration**: Built-in support for vector embeddings and similarity search
+- **Query Builder**: Safe SQL query construction to prevent SQL injection
+- **Cross-Platform**: Works on Windows, Linux, and macOS
+
+## Installation
+
+### From Source
+
+1. **Build RemDB Core**: First, build the RemDB core library
+   ```bash
+   cd remdb
+   cargo build --release
+   ```
+
+2. **Install Python Bindings**: Then install the Python bindings in development mode
+   ```bash
+   cd remdb-python
+   pip install -e .
+   ```
+
+### From PyPI (Coming Soon)
+
+```bash
+pip install remdb-python
+```
+
+## Quick Start
+
+### Basic Usage
+
+```python
+import remdb
+
+# Connect to database (using context manager)
+with remdb.connect("database.rdb") as db:
+    # Get table
+    table = db.get_table("sensor_data")
+    
+    # Insert record
+    table.insert({
+        "id": 1,
+        "value": 23.5,
+        "timestamp": 1620000000
+    })
+    
+    # Get record (普通模式)
+    record = table.get(1)
+    print(f"Record: {record}")
+    
+    # Get record (零拷贝模式)
+    record_zero_copy = table.get(1, zero_copy=True)
+    print(f"Zero-copy record type: {type(record_zero_copy)}")
+    
+    # Update record
+    table.update(1, {
+        "id": 1,
+        "value": 25.0,
+        "timestamp": 1620000001
+    })
+    
+    # Delete record
+    table.delete(1)
+    
+    # Execute SQL query
+    result_set = db.execute_query("SELECT * FROM sensor_data LIMIT 10")
+    for row in result_set:
+        print(row)
+```
+
+### Transaction Usage
+
+```python
+import remdb
+
+with remdb.connect("database.rdb") as db:
+    # Start transaction
+    with db.begin_transaction() as tx:
+        # Perform multiple operations
+        table = db.get_table("sensor_data")
+        table.insert({"id": 1, "value": 23.5})
+        table.insert({"id": 2, "value": 24.0})
+        # Transaction will be committed automatically
+    
+    # Or explicitly commit/rollback
+    tx = db.begin_transaction()
+    try:
+        # Perform operations
+        tx.commit()
+    except Exception:
+        tx.rollback()
+```
+
+### NumPy Integration
+
+```python
+import remdb
+import numpy as np
+from remdb.extras.numpy import NumPyIntegration
+
+with remdb.connect("database.rdb") as db:
+    table = db.get_table("sensor_data")
+    
+    # Get column as NumPy array
+    values = table.get_column_as_numpy("value")
+    print(f"Values shape: {values.shape}")
+    
+    # Insert data from NumPy array
+    data = np.array([[3, 22.5], [4, 25.0], [5, 23.0]])
+    column_names = ["id", "value"]
+    for row in data:
+        record = dict(zip(column_names, row))
+        table.insert(record)
+```
+
+### Pandas Integration
+
+```python
+import remdb
+import pandas as pd
+from remdb.extras.pandas import PandasIntegration
+
+with remdb.connect("database.rdb") as db:
+    # Create DataFrame
+    df = pd.DataFrame({
+        "id": [6, 7, 8],
+        "value": [21.0, 26.5, 22.0],
+        "timestamp": [1620000002, 1620000003, 1620000004]
+    })
+    
+    # Insert from DataFrame
+    table = db.get_table("sensor_data")
+    table.insert_from_dataframe(df)
+    
+    # Convert table to DataFrame
+    df_result = table.to_dataframe()
+    print(df_result)
+    
+    # Read from SQL query
+    df_sql = PandasIntegration.read_sql("SELECT * FROM sensor_data", db)
+    print(df_sql)
+```
+
+### Vector Search
+
+```python
+import remdb
+
+with remdb.connect("database.rdb") as db:
+    # Get table with vector data
+    table = db.get_table("products")
+    
+    # Define query vector (e.g., product embedding)
+    query_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    
+    # Perform vector search
+    results = table.vector_search("embedding", query_vector, k=5)
+    
+    # Display results
+    for i, result in enumerate(results, 1):
+        product_id = result["id"]
+        distance = result["distance"]
+        print(f"{i}. Product ID: {product_id}, Distance: {distance:.4f}")
+```
+
+### Hybrid Search
+
+```python
+import remdb
+
+with remdb.connect("database.rdb") as db:
+    # Get table with vector and scalar data
+    table = db.get_table("products")
+    
+    # Define query vector
+    query_vector = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    
+    # Define scalar filter
+    filter_expr = "price >= 10 AND price <= 50"
+    
+    # Perform hybrid search
+    results = table.hybrid_search("embedding", query_vector, filter_expr, k=5)
+    
+    # Display results
+    for i, result in enumerate(results, 1):
+        product_id = result["id"]
+        distance = result["distance"]
+        print(f"{i}. Product ID: {product_id}, Distance: {distance:.4f}")
+```
+
+### Query Builder
+
+```python
+import remdb
+
+with remdb.connect("database.rdb") as db:
+    # Get table
+    table = db.get_table("products")
+    
+    # Build query
+    builder = table.query()
+    builder.select("id", "name", "price")\
+           .where("category = ?", "electronics")\
+           .where("price >= ?", 50)\
+           .order("price")\
+           .limit(10)
+    
+    # Execute query
+    result_set = builder.execute(db)
+    
+    # Display results
+    for row in result_set:
+        print(f"ID: {row['id']}, Name: {row['name']}, Price: ${row['price']:.2f}")
+```
+
+## API Reference
+
+### Connection
+
+- `remdb.connect(path)`: Connect to a database
+- `connection.execute_query(sql)`: Execute SQL query
+- `connection.get_table(table_name)`: Get table by name
+- `connection.begin_transaction()`: Begin a transaction
+- `connection.save_snapshot(path)`: Save database snapshot
+- `connection.restore_snapshot(path)`: Restore from snapshot
+
+### Table
+
+- `table.insert(record)`: Insert a record
+- `table.get(key, zero_copy=False)`: Get a record by key
+- `table.update(key, record)`: Update a record by key
+- `table.delete(key)`: Delete a record by key
+- `table.get_record_count()`: Get number of records
+- `table.get_column_as_numpy(column_name, dtype=None)`: Get column as NumPy array
+- `table.insert_from_dataframe(dataframe, batch_size=1000)`: Insert from Pandas DataFrame
+- `table.to_dataframe(columns=None)`: Convert to Pandas DataFrame
+- `table.vector_search(field_name, query_vector, k=10)`: Perform vector similarity search
+- `table.hybrid_search(field_name, query_vector, filter_expr, k=10)`: Perform hybrid search (vector + scalar)
+- `table.query()`: Create a query builder for safe SQL construction
+
+### Transaction
+
+- `transaction.commit()`: Commit transaction
+- `transaction.rollback()`: Rollback transaction
+- `transaction.is_active()`: Check if transaction is active
+
+### ResultSet
+
+- `result_set.get_columns()`: Get column names
+- `result_set.get_rows_count()`: Get number of rows
+- `result_set.get_row(row_index)`: Get row by index
+- `result_set.to_dataframe()`: Convert to Pandas DataFrame
+- Iterate over rows with `for row in result_set:`
+
+## Examples
+
+See the `examples/` directory for more examples:
+
+- `basic_usage.py`: Basic database operations
+- `numpy_pandas_integration.py`: NumPy and Pandas integration
+- `vector_search_example.py`: Vector similarity search example
+- `hybrid_search_example.py`: Hybrid search (vector + scalar) example
+- `query_builder_example.py`: Safe SQL query construction example
+
+## Testing
+
+Run the test suite:
+
+```bash
+cd remdb-python
+python -m pytest tests/
+```
+
+## Development
+
+### Requirements
+
+- Python 3.8+
+- Rust (for building RemDB core)
+- PyBind11 (for C++/Python bindings)
+- NumPy (optional, for NumPy integration)
+- Pandas (optional, for Pandas integration)
+
+### Building
+
+1. Build RemDB core: `cargo build --release`
+2. Install Python bindings: `pip install -e .`
+
+### Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

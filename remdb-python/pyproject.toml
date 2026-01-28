@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=42", "wheel", "pybind11>=2.6.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remdb-python"
+version = "0.1.0"
+description = "Python bindings for RemDB embedded database"
+readme = "README.md"
+authors = [
+    { name = "RemDB Team", email = "jiabosc@gmail.com" }
+]
+license = { file = "LICENSE" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pybind11>=2.6.0"
+]
+extras = { "numpy" = ["numpy>=1.18.0"], "pandas" = ["pandas>=1.0.0"], "async" = ["asyncio>=3.4.3"] }
+
+[project.urls]
+"Homepage" = "https://github.com/remdb/remdb-python"
+"Documentation" = "https://remdb.readthedocs.io/"
+"Repository" = "https://github.com/remdb/remdb-python"
+"Issues" = "https://github.com/remdb/remdb-python/issues"
+
+[tool.setuptools]
+packages = ["remdb", "remdb.extras"]
+
+[tool.setuptools.package-data]
+remdb = ["*.pyi"]
+
+[tool.setuptools.cmdclass]
+build_ext = "setup.BuildExt"
