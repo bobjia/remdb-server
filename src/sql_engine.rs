@@ -135,6 +135,11 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         return execute_tables(db);
     }
 
+    // 处理SHOW DATABASES命令
+    if sql_lower == "show databases" {
+        return execute_databases(db);
+    }
+
     // 处理DESCRIBE命令
     if sql_lower.starts_with("describe ") || sql_lower.starts_with("desc ") {
         let table_name = sql_lower
@@ -402,6 +407,25 @@ fn execute_tables(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
             affected_rows += 1;
         }
     }
+
+    // 构造结果集
+    Ok(ResultSet {
+        columns,
+        rows,
+        affected_rows,
+    })
+}
+
+/// 执行SHOW DATABASES命令
+fn execute_databases(db: &RemDb) -> std::result::Result<ResultSet, SqlError> {
+    // 直接返回数据库列表
+    let columns = vec!["Databases".to_string()];
+    let mut rows = Vec::new();
+    let mut affected_rows = 0;
+
+    // 假设默认数据库为"default"
+    rows.push(vec!["default".to_string()]);
+    affected_rows += 1;
 
     // 构造结果集
     Ok(ResultSet {

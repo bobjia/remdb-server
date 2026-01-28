@@ -115,9 +115,12 @@ fn main() {
 
     request_id += 1;
 
+    // 跟踪当前选中的数据库
+    let mut current_database: Option<String> = None;
+
     // 如果提供了sql参数，执行单次命令并退出
     if let Some(sql) = cli.sql {
-        execute_sql(&mut stream, &sql, &mut request_id);
+        execute_sql(&mut stream, &sql, &mut request_id, &current_database);
         return;
     }
 
@@ -165,6 +168,47 @@ fn main() {
                     continue;
                 }
 
+                // 处理use database命令
+                if command.starts_with("use database ") {
+                    let parts: Vec<&str> = original_line.split_whitespace().collect();
+                    if parts.len() != 3 {
+                        eprintln!("Error: Invalid use database command. Use 'use database <database_name>'.");
+                        continue;
+                    }
+                    
+                    let database_name = parts[2];
+                    current_database = Some(database_name.to_string());
+                    println!("✓ Database changed to: {}", database_name);
+                    continue;
+                }
+
+                // 处理close database命令，清除当前数据库上下文
+                if command.starts_with("close database ") {
+                    let parts: Vec<&str> = original_line.split_whitespace().collect();
+                    if parts.len() != 3 {
+                        eprintln!("Error: Invalid close database command. Use 'close database <database_name>'.");
+                        continue;
+                    }
+                    
+                    let database_name = parts[2];
+                    // 执行close database命令
+                    execute_sql(&mut stream, original_line, &mut request_id, &current_database);
+                    // 如果关闭的是当前选中的数据库，清除数据库上下文
+                    if let Some(current_db) = &current_database {
+                        if current_db == database_name {
+                            current_database = None;
+                            println!("✓ Database context cleared for: {}", database_name);
+                        }
+                    }
+                    continue;
+                }
+
+                // 处理databases命令，列出所有数据库
+                if command == "databases" {
+                    execute_sql(&mut stream, "show databases", &mut request_id, &current_database);
+                    continue;
+                }
+
                 // 处理source命令，用于执行文件中的SQL/DDL语句
                 if command.starts_with("source ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
@@ -197,7 +241,7 @@ fn main() {
                                     let statement = current_statement.trim_end_matches(';').trim();
                                     if !statement.is_empty() {
                                         // 执行单个语句
-                                        execute_sql(&mut stream, statement, &mut request_id);
+                                        execute_sql(&mut stream, statement, &mut request_id, &current_database);
                                     }
                                     // 重置当前语句
                                     current_statement.clear();
@@ -207,7 +251,7 @@ fn main() {
                             // 执行最后一个没有分号的语句
                             let statement = current_statement.trim();
                             if !statement.is_empty() {
-                                execute_sql(&mut stream, statement, &mut request_id);
+                                execute_sql(&mut stream, statement, &mut request_id, &current_database);
                             }
 
                             println!("✓ Successfully executed commands from file: {}", file_path);
@@ -219,7 +263,7 @@ fn main() {
                     continue;
                 }
 
-                execute_sql(&mut stream, original_line, &mut request_id);
+                execute_sql(&mut stream, original_line, &mut request_id, &current_database);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 // 处理Ctrl+C信号，退出循环
@@ -275,7 +319,20 @@ fn read_jdbc_response(stream: &mut TcpStream) -> std::io::Result<JdbcResponse> {
     Ok(response)
 }
 
-fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64) {
+fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_database: &Option<String>) {
+    // 检查是否需要数据库上下文
+    let sql_lower = sql.trim().to_lowercase();
+    let needs_database = !sql_lower.starts_with("create database ") && 
+                         !sql_lower.starts_with("drop database ") &&
+                         !sql_lower.starts_with("use database ") &&
+                         !sql_lower.starts_with("show databases");
+    
+    // 如果需要数据库上下文但未选择，则返回错误
+    if needs_database && current_database.is_none() {
+        eprintln!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
+        return;
+    }
+
     // 创建查询请求
     let query_request = QueryRequest {
         sql: sql.to_string(),
@@ -573,6 +630,7 @@ fn print_help() {
     println!("  exit, quit                     - Exit the console");
     println!("  help                           - Show this help message");
     println!("  source <file_path>             - Execute SQL/DDL commands from file");
+    println!("  databases                      - List all databases");
     println!("  tables                         - List all tables");
     println!("  describe <table>               - Show table schema");
     println!("  desc <table>                   - Shortcut for describe");
