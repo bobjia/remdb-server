@@ -582,6 +582,10 @@ fn print_help() {
     println!("  delete ...                     - Execute DELETE statement");
     println!("  create table ...               - Create a new table");
     println!("  create index ...               - Create a new index");
+    println!("  create database ...            - Create a new database");
+    println!("  drop database ...              - Drop an existing database");
+    println!("  use database ...               - Switch to a specified database");
+    println!("  close database ...             - Close a specified database");
     println!("  stat                           - Show database monitoring statistics");
     println!("  healthcheck                    - Check database health status");
     println!("  begin, begin transaction       - Start a new transaction");

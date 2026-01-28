@@ -251,6 +251,78 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         });
     }
 
+    // 处理CREATE DATABASE命令
+    if sql_lower.starts_with("create database ") {
+        let parts: Vec<&str> = sql_lower.split_whitespace().collect();
+        if parts.len() < 3 {
+            return Err(SqlError::Parsing("Missing database name".to_string()));
+        }
+        let database_name = parts[2];
+        // 调用数据库的create_database方法
+        db.create_database(database_name)?;
+        // 返回成功结果
+        return Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: 0,
+        });
+    }
+
+    // 处理DROP DATABASE命令
+    if sql_lower.starts_with("drop database ") {
+        let parts: Vec<&str> = sql_lower.split_whitespace().collect();
+        // 处理IF EXISTS选项
+        let database_name = if parts.len() > 4 && parts[2] == "if" && parts[3] == "exists" {
+            parts.get(4).ok_or(SqlError::Parsing("Missing database name".to_string()))?
+        } else if parts.len() >= 3 {
+            parts[2]
+        } else {
+            return Err(SqlError::Parsing("Missing database name".to_string()));
+        };
+        // 调用数据库的drop_database方法
+        db.drop_database(database_name)?;
+        // 返回成功结果
+        return Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: 0,
+        });
+    }
+
+    // 处理USE DATABASE命令
+    if sql_lower.starts_with("use database ") {
+        let parts: Vec<&str> = sql_lower.split_whitespace().collect();
+        if parts.len() < 3 {
+            return Err(SqlError::Parsing("Missing database name".to_string()));
+        }
+        let database_name = parts[2];
+        // 调用数据库的use_database方法
+        db.use_database(database_name)?;
+        // 返回成功结果
+        return Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: 0,
+        });
+    }
+
+    // 处理CLOSE DATABASE命令
+    if sql_lower.starts_with("close database ") {
+        let parts: Vec<&str> = sql_lower.split_whitespace().collect();
+        if parts.len() < 3 {
+            return Err(SqlError::Parsing("Missing database name".to_string()));
+        }
+        let database_name = parts[2];
+        // 调用数据库的close_database方法
+        db.close_database(database_name)?;
+        // 返回成功结果
+        return Ok(ResultSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: 0,
+        });
+    }
+
     // 处理EXPORT命令
     if sql_lower.starts_with("export ") {
         let parts: Vec<&str> = sql_lower.split_whitespace().collect();

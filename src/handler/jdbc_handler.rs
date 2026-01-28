@@ -506,6 +506,13 @@ impl JdbcProtocolHandler {
             }
             Some(jdbc_request::Request::Connection(conn_req)) => {
                 // 处理连接请求
+                // 验证数据库名称是否为空
+                if conn_req.database.is_empty() {
+                    response.status = Status::Error.into();
+                    response.error_message = "Database name is required".to_string();
+                    return response;
+                }
+                
                 if auth_enabled {
                     // 验证用户名和密码
                     let provided_username = conn_req.username;

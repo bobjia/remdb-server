@@ -168,6 +168,10 @@ pub fn print_help() {
     println!("  describe <table>                - Show table schema");
     println!("  desc <table>                    - Shortcut for describe");
     println!("  select ...                      - Execute SELECT query");
+    println!("  create database <name>          - Create a new database");
+    println!("  drop database [if exists] <name> - Drop an existing database");
+    println!("  use database <name>             - Switch to a specified database");
+    println!("  close database <name>           - Close a specified database");
     println!("  snapshot full                   - Save a full snapshot");
     println!("  snapshot incremental            - Save an incremental snapshot");
     println!("  stat                            - Show database monitoring statistics");
