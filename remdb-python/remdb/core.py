@@ -260,8 +260,17 @@ class RemDbTable:
         if not record:
             return False
         
-        # 直接调用底层实现
-        return self.table.insert(record)
+        # 转换记录格式以匹配C++实现的期望
+        if isinstance(record, dict):
+            # 将字典中的所有值转换为字符串
+            str_record = {k: str(v) for k, v in record.items()}
+            return self.table.insert(str_record)
+        elif isinstance(record, list):
+            # 将列表中的所有值转换为字符串
+            str_record = [str(item) for item in record]
+            return self.table.insert(str_record)
+        
+        return False
 
     def get(self, key: Any, zero_copy: bool = False) -> Optional[Union[Dict[str, Any], memoryview]]:
         """
@@ -309,8 +318,17 @@ class RemDbTable:
         if not record:
             return False
         
-        # 直接调用底层实现
-        return self.table.update(str(key), record)
+        # 转换记录格式以匹配C++实现的期望
+        if isinstance(record, dict):
+            # 将字典中的所有值转换为字符串
+            str_record = {k: str(v) for k, v in record.items()}
+            return self.table.update(str(key), str_record)
+        elif isinstance(record, list):
+            # 将列表中的所有值转换为字符串
+            str_record = [str(item) for item in record]
+            return self.table.update(str(key), str_record)
+        
+        return False
 
     def delete(self, key: Any) -> bool:
         """
