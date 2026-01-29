@@ -7,12 +7,18 @@ import pybind11
 # 获取pybind11的包含目录
 pybind11_include_dir = pybind11.get_include()
 
+# 添加remdb核心库的包含目录和库文件路径
+remdb_include_dir = os.path.abspath('../remdb/include')
+remdb_lib_dir = os.path.abspath('../remdb/target/release')
+
 # 定义C扩展模块
 ext_modules = [
     Extension(
         '_remdb',
         sources=['src/remdb_extension.cpp'],
-        include_dirs=['src', pybind11_include_dir],
+        include_dirs=['src', pybind11_include_dir, remdb_include_dir],
+        library_dirs=[remdb_lib_dir],
+        libraries=['remdb'],
         language='c++'
     )
 ]

@@ -13,3 +13,8 @@ remdb_python.egg-info/requires.txt
 remdb_python.egg-info/top_level.txt
 src/remdb_extension.cpp
 tests/test_core.py
+tests/test_failed.py
+tests/test_jdbc_connection.py
+tests/test_network_connection.py
+tests/test_remdb.py
+tests/test_server.py

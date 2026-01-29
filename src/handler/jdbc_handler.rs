@@ -109,18 +109,37 @@ impl WorkerThread {
         let username_clone = username.clone();
         let password_hash_clone = password_hash.clone();
 
+        let id_clone = id;
         let handle = std::thread::spawn(move || {
             while !flag_clone.load(Ordering::SeqCst) {
                 // 从无锁队列获取请求
                 if let Some((request, response_tx)) = queue_clone.pop() {
-                    // 处理请求
-                    let response = JdbcProtocolHandler::process_single_request(
-                        &mut *db_clone.lock().unwrap(),
-                        request,
-                        auth_enabled_clone,
-                        &username_clone,
-                        &password_hash_clone,
-                    );
+                    // 处理请求 - 安全地获取锁
+                    let response = match db_clone.lock() {
+                        Ok(mut db_guard) => {
+                            JdbcProtocolHandler::process_single_request(
+                                &mut *db_guard,
+                                request,
+                                auth_enabled_clone,
+                                &username_clone,
+                                &password_hash_clone,
+                            )
+                        }
+                        Err(_poisoned) => {
+                            error!("Mutex poisoned in worker thread {}, shutting down thread", id_clone);
+                            // 创建错误响应
+                            let error_response = JdbcResponse {
+                                request_id: request.request_id,
+                                status: Status::Error.into(),
+                                error_message: "Database lock poisoned".to_string(),
+                                response: None,
+                            };
+                            // 发送错误响应
+                            let _ = response_tx.send(error_response);
+                            break; // 退出线程循环
+                        }
+                    };
+                    
                     // 发送响应
                     if response_tx.send(response).is_err() {
                         warn!("Failed to send response: channel closed");

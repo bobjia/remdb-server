@@ -260,15 +260,25 @@ class RemDbTable:
         if not record:
             return False
         
-        # 转换记录格式以匹配C++实现的期望
+        # 检查是否是网络连接
+        is_network_connection = hasattr(self.table, 'table_name')
+        
         if isinstance(record, dict):
-            # 将字典中的所有值转换为字符串
-            str_record = {k: str(v) for k, v in record.items()}
-            return self.table.insert(str_record)
+            if is_network_connection:
+                # 对于网络连接，保留原始类型
+                return self.table.insert(record)
+            else:
+                # 对于本地连接，将字典中的所有值转换为字符串
+                str_record = {k: str(v) for k, v in record.items()}
+                return self.table.insert(str_record)
         elif isinstance(record, list):
-            # 将列表中的所有值转换为字符串
-            str_record = [str(item) for item in record]
-            return self.table.insert(str_record)
+            if is_network_connection:
+                # 对于网络连接，保留原始类型
+                return self.table.insert(record)
+            else:
+                # 对于本地连接，将列表中的所有值转换为字符串
+                str_record = [str(item) for item in record]
+                return self.table.insert(str_record)
         
         return False
 
@@ -318,15 +328,26 @@ class RemDbTable:
         if not record:
             return False
         
+        # 检查是否是网络连接
+        is_network_connection = hasattr(self.table, 'table_name')
+        
         # 转换记录格式以匹配C++实现的期望
         if isinstance(record, dict):
-            # 将字典中的所有值转换为字符串
-            str_record = {k: str(v) for k, v in record.items()}
-            return self.table.update(str(key), str_record)
+            if is_network_connection:
+                # 对于网络连接，保留原始类型
+                return self.table.update(key, record)
+            else:
+                # 对于本地连接，将字典中的所有值转换为字符串
+                str_record = {k: str(v) for k, v in record.items()}
+                return self.table.update(str(key), str_record)
         elif isinstance(record, list):
-            # 将列表中的所有值转换为字符串
-            str_record = [str(item) for item in record]
-            return self.table.update(str(key), str_record)
+            if is_network_connection:
+                # 对于网络连接，保留原始类型
+                return self.table.update(key, record)
+            else:
+                # 对于本地连接，将列表中的所有值转换为字符串
+                str_record = [str(item) for item in record]
+                return self.table.update(str(key), str_record)
         
         return False
 
@@ -645,13 +666,27 @@ class NetworkTableAdapter:
                 columns = list(record.keys())
                 values = list(record.values())
                 
-                # 构建SQL语句
+                # 构建SQL语句，直接插入值
                 cols_str = ", ".join(columns)
-                placeholders = ", ".join(["?"] * len(values))
-                sql = f"INSERT INTO {self.table_name} ({cols_str}) VALUES ({placeholders})"
+                # 为不同类型的值添加适当的引号
+                def format_value(v):
+                    if isinstance(v, str):
+                        return f"'{v}'"
+                    elif isinstance(v, bool):
+                        return str(v).lower()
+                    elif v is None:
+                        return "NULL"
+                    # 对于数字类型，转换为字符串但不添加引号
+                    elif isinstance(v, (int, float)):
+                        return str(v)
+                    else:
+                        return str(v)
                 
-                # 执行查询
-                self.connection.jdbc_client.execute_query(sql, values)
+                values_str = ", ".join([format_value(v) for v in values])
+                sql = f"INSERT INTO {self.table_name} ({cols_str}) VALUES ({values_str})"
+                
+                # 执行查询，不传递参数
+                self.connection.jdbc_client.execute_query(sql)
                 return True
             else:
                 # 对于列表类型，需要知道列名，这里简化处理
@@ -671,9 +706,23 @@ class NetworkTableAdapter:
             Dictionary of record values or None if not found
         """
         try:
-            # 构建SELECT语句
-            sql = f"SELECT * FROM {self.table_name} WHERE id = ?"
-            result = self.connection.jdbc_client.execute_query(sql, [key])
+            # 构建SELECT语句，直接插入值而不是使用参数占位符
+            # 为key添加适当的引号
+            def format_key(k):
+                if isinstance(k, str):
+                    return f"'{k}'"
+                elif isinstance(k, bool):
+                    return str(k).lower()
+                elif k is None:
+                    return "NULL"
+                # 对于数字类型，直接返回字符串表示，不加引号
+                elif isinstance(k, (int, float)):
+                    return str(k)
+                else:
+                    return str(k)
+            
+            sql = f"SELECT * FROM {self.table_name} WHERE id = {format_key(key)}"
+            result = self.connection.jdbc_client.execute_query(sql)
             
             # 检查结果
             if result.get("rows") and len(result.get("rows")) > 0:
@@ -697,15 +746,37 @@ class NetworkTableAdapter:
         """
         try:
             if isinstance(record, dict):
-                # 构建UPDATE语句
-                set_clause = ", ".join([f"{col} = ?" for col in record.keys()])
-                values = list(record.values())
-                values.append(key)
+                # 构建UPDATE语句，直接插入值
+                # 为不同类型的值添加适当的引号
+                def format_value(v):
+                    if isinstance(v, str):
+                        return f"'{v}'"
+                    elif isinstance(v, bool):
+                        return str(v).lower()
+                    elif v is None:
+                        return "NULL"
+                    # 对于数字类型，转换为字符串但不添加引号
+                    elif isinstance(v, (int, float)):
+                        return str(v)
+                    else:
+                        return str(v)
                 
-                sql = f"UPDATE {self.table_name} SET {set_clause} WHERE id = ?"
+                # 为key添加适当的引号
+                def format_key(k):
+                    if isinstance(k, str):
+                        return f"'{k}'"
+                    elif isinstance(k, bool):
+                        return str(k).lower()
+                    elif k is None:
+                        return "NULL"
+                    else:
+                        return str(k)
                 
-                # 执行查询
-                self.connection.jdbc_client.execute_query(sql, values)
+                set_clause = ", ".join([f"{col} = {format_value(v)}" for col, v in record.items()])
+                sql = f"UPDATE {self.table_name} SET {set_clause} WHERE id = {format_key(key)}"
+                
+                # 执行查询，不传递参数
+                self.connection.jdbc_client.execute_query(sql)
                 return True
             else:
                 # 对于列表类型，需要知道列名，这里简化处理
@@ -713,7 +784,7 @@ class NetworkTableAdapter:
         except Exception:
             return False
 
-    def delete(self, key: Any) -> bool:
+    def delete_record(self, key: Any) -> bool:
         """
         Delete a record by key
 
@@ -724,14 +795,36 @@ class NetworkTableAdapter:
             True if successful, False otherwise
         """
         try:
-            # 构建DELETE语句
-            sql = f"DELETE FROM {self.table_name} WHERE id = ?"
+            # 构建DELETE语句，直接插入值
+            def format_key(k):
+                if isinstance(k, str):
+                    return f"'{k}'"
+                elif isinstance(k, bool):
+                    return str(k).lower()
+                elif k is None:
+                    return "NULL"
+                else:
+                    return str(k)
             
-            # 执行查询
-            self.connection.jdbc_client.execute_query(sql, [key])
+            sql = f"DELETE FROM {self.table_name} WHERE id = {format_key(key)}"
+            
+            # 执行查询，不传递参数
+            self.connection.jdbc_client.execute_query(sql)
             return True
         except Exception:
             return False
+            
+    def delete(self, key: Any) -> bool:
+        """
+        Delete a record by key
+
+        Args:
+            key: Primary key value
+
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.delete_record(key)
 
     def get_record_count(self) -> int:
         """
