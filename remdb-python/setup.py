@@ -2,23 +2,17 @@ from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import sys
 import os
+import pybind11
 
-# 获取remdb的包含目录和库目录
-remdb_include_dir = os.path.join(os.path.dirname(__file__), '..', 'remdb', 'include')
-remdb_lib_dir = os.path.join(os.path.dirname(__file__), '..', 'remdb', 'target', 'release')
-
-# 确保路径存在
-if not os.path.exists(remdb_include_dir):
-    raise FileNotFoundError(f"RemDB include directory not found: {remdb_include_dir}")
+# 获取pybind11的包含目录
+pybind11_include_dir = pybind11.get_include()
 
 # 定义C扩展模块
 ext_modules = [
     Extension(
         '_remdb',
         sources=['src/remdb_extension.cpp'],
-        include_dirs=[remdb_include_dir, 'src'],
-        library_dirs=[remdb_lib_dir],
-        libraries=['remdb'],
+        include_dirs=['src', pybind11_include_dir],
         language='c++'
     )
 ]
@@ -29,7 +23,13 @@ class BuildExt(build_ext):
         # 确保使用C++11或更高版本
         for ext in self.extensions:
             if ext.language == 'c++':
-                ext.extra_compile_args = ['-std=c++11']
+                # 为不同编译器设置合适的C++标准选项
+                if sys.platform == 'win32':
+                    # MSVC使用不同的语法
+                    ext.extra_compile_args = ['/std:c++11']
+                else:
+                    # GCC/Clang
+                    ext.extra_compile_args = ['-std=c++11']
         super().build_extensions()
 
 # 读取README.md作为长描述

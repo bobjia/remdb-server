@@ -1,3 +1,40 @@
+Metadata-Version: 2.4
+Name: remdb-python
+Version: 0.1.0
+Summary: Python bindings for RemDB embedded database
+Home-page: https://github.com/remdb/remdb-python
+Author: RemDB Team
+Author-email: RemDB Team <jiabosc@gmail.com>
+Project-URL: Homepage, https://github.com/remdb/remdb-python
+Project-URL: Documentation, https://remdb.readthedocs.io/
+Project-URL: Repository, https://github.com/remdb/remdb-python
+Project-URL: Issues, https://github.com/remdb/remdb-python/issues
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Database
+Classifier: Topic :: Database :: Database Engines/Servers
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: pybind11>=2.6.0
+Requires-Dist: protobuf>=4.0.0
+Provides-Extra: numpy
+Requires-Dist: numpy>=1.18.0; extra == "numpy"
+Provides-Extra: pandas
+Requires-Dist: pandas>=1.0.0; extra == "pandas"
+Provides-Extra: async
+Requires-Dist: asyncio>=3.4.3; extra == "async"
+Dynamic: author
+Dynamic: home-page
+Dynamic: requires-python
+
 # RemDB Python Bindings
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

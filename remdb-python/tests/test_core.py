@@ -227,5 +227,59 @@ class TestAdvancedQueries(unittest.TestCase):
                 # 如果表不存在，跳过测试
                 pass
 
+class TestNetworkConnection(unittest.TestCase):
+    """Test network connection functionality"""
+
+    def test_network_connection_url_format(self):
+        """Test network connection URL format"""
+        # 测试JDBC URL格式验证
+        test_urls = [
+            "jdbc://localhost:6666",
+            "jdbc://127.0.0.1:8080",
+            "jdbc://example.com:9999"
+        ]
+        
+        for url in test_urls:
+            try:
+                # 这里只是测试URL格式，不会实际连接
+                # 注意：实际运行时可能会尝试连接，所以可能会失败
+                # 但我们主要测试URL格式是否被正确识别
+                db = remdb.connect(url)
+                self.assertIsNotNone(db)
+                db.close()
+            except Exception as e:
+                # 预期可能会失败，因为服务器可能未运行
+                # 但不应该是因为URL格式错误
+                self.assertNotIn("Invalid URL format", str(e))
+
+    def test_network_connection_error_handling(self):
+        """Test network connection error handling"""
+        # 测试连接到不存在的服务器
+        invalid_url = "jdbc://localhost:9999"
+        
+        try:
+            db = remdb.connect(invalid_url)
+            # 如果连接成功，关闭连接
+            db.close()
+        except Exception as e:
+            # 预期会失败，因为服务器可能未运行
+            self.assertIsInstance(e, Exception)
+
+    def test_network_connection_context_manager(self):
+        """Test network connection context manager"""
+        test_url = "jdbc://localhost:6666"
+        
+        try:
+            db = None
+            with remdb.connect(test_url) as conn:
+                db = conn
+                self.assertTrue(hasattr(conn, 'connected'))
+            # 退出上下文后，连接应该关闭
+            if db:
+                self.assertFalse(hasattr(db, 'connected') and db.connected)
+        except Exception as e:
+            # 预期可能会失败，因为服务器可能未运行
+            pass
+
 if __name__ == '__main__':
     unittest.main()

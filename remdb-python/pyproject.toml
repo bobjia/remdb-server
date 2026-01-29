@@ -27,9 +27,13 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    "pybind11>=2.6.0"
+    "pybind11>=2.6.0",
+    "protobuf>=4.0.0"
 ]
-extras = { "numpy" = ["numpy>=1.18.0"], "pandas" = ["pandas>=1.0.0"], "async" = ["asyncio>=3.4.3"] }
+[project.optional-dependencies]
+numpy = ["numpy>=1.18.0"]
+pandas = ["pandas>=1.0.0"]
+async = ["asyncio>=3.4.3"]
 
 [project.urls]
 "Homepage" = "https://github.com/remdb/remdb-python"
