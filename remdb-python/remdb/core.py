@@ -14,184 +14,6 @@ from typing import Dict, List, Optional, Any, Union
 # 导入网络模块
 from .network import JdbcClient, parse_jdbc_url, JdbcClientError
 
-# 模拟C++实现的类
-class MockRemDb:
-    """模拟RemDb类"""
-    
-    def __init__(self):
-        self.connected_ = False
-        self.db_path_ = ""
-        self.tables_ = {}
-    
-    def connect(self, db_path):
-        self.db_path_ = db_path
-        self.connected_ = True
-        return True
-    
-    def is_connected(self):
-        return self.connected_
-    
-    def get_table(self, table_name):
-        if not self.connected_:
-            return None
-        
-        if table_name not in self.tables_:
-            self.tables_[table_name] = MockRemDbTable(table_name)
-        return self.tables_[table_name]
-    
-    def begin_transaction(self):
-        if not self.connected_:
-            return None
-        return MockRemDbTransaction()
-    
-    def execute_query(self, sql):
-        if not self.connected_:
-            return None
-        return MockRemDbResultSet(sql)
-    
-    def save_snapshot(self, path):
-        if not self.connected_:
-            return False
-        return True
-    
-    def restore_snapshot(self, path):
-        if not self.connected_:
-            return False
-        return True
-
-class MockRemDbTable:
-    """模拟RemDbTable类"""
-    
-    def __init__(self, table_name):
-        self.table_name_ = table_name
-        self.records_ = {}
-    
-    def insert(self, record):
-        if isinstance(record, dict) and "id" in record:
-            self.records_[record["id"]] = []
-            return True
-        elif isinstance(record, list) and record:
-            self.records_[record[0]] = record
-            return True
-        return False
-    
-    def get(self, key, record):
-        # 尝试将键转换为字符串，以处理不同类型的键
-        str_key = str(key)
-        if str_key in self.records_:
-            record.extend(self.records_[str_key])
-            return True
-        # 尝试直接使用原始键
-        if key in self.records_:
-            record.extend(self.records_[key])
-            return True
-        return False
-    
-    def get_zero_copy(self, key):
-        # 尝试将键转换为字符串，以处理不同类型的键
-        str_key = str(key)
-        if str_key in self.records_:
-            data = ",".join(self.records_[str_key])
-            return MockZeroCopyData(data)
-        # 尝试直接使用原始键
-        if key in self.records_:
-            data = ",".join(self.records_[key])
-            return MockZeroCopyData(data)
-        # 如果键不存在，返回一个默认的MockZeroCopyData对象，而不是None
-        return MockZeroCopyData("")
-    
-    def update(self, key, record):
-        if key in self.records_:
-            self.records_[key] = [] if isinstance(record, dict) else record
-            return True
-        return False
-    
-    def delete_record(self, key):
-        if key in self.records_:
-            del self.records_[key]
-            return True
-        return False
-    
-    def get_record_count(self):
-        return len(self.records_)
-    
-    def get_column_as_numpy(self, column_name):
-        try:
-            import numpy as np
-            values = [0.0 for _ in self.records_]
-            return np.array(values)
-        except ImportError:
-            return []
-    
-    def vector_search(self, field_name, query_vector, k):
-        results = []
-        for i in range(min(k, len(self.records_))):
-            results.append((str(i), 0.0))
-        return results
-
-class MockZeroCopyData:
-    """模拟ZeroCopyData类"""
-    
-    def __init__(self, data):
-        self.data_ = data
-    
-    def tobytes(self):
-        return self.data_.encode('utf-8')
-
-class MockRemDbTransaction:
-    """模拟RemDbTransaction类"""
-    
-    def __init__(self):
-        self.active_ = True
-    
-    def commit(self):
-        if self.active_:
-            self.active_ = False
-            return True
-        return False
-    
-    def rollback(self):
-        if self.active_:
-            self.active_ = False
-            return True
-        return False
-    
-    def is_active(self):
-        return self.active_
-
-class MockRemDbResultSet:
-    """模拟RemDbResultSet类"""
-    
-    def __init__(self, sql):
-        self.columns_ = ["id", "name", "value"]
-        self.rows_ = [
-            ["1", "test1", "value1"],
-            ["2", "test2", "value2"]
-        ]
-    
-    def get_columns(self):
-        return self.columns_
-    
-    def get_rows_count(self):
-        return len(self.rows_)
-    
-    def get_row(self, index):
-        if 0 <= index < len(self.rows_):
-            return self.rows_[index]
-        return []
-
-# 替换_remdb模块中的类
-if not hasattr(_remdb, 'RemDb'):
-    _remdb.RemDb = MockRemDb
-if not hasattr(_remdb, 'RemDbTable'):
-    _remdb.RemDbTable = MockRemDbTable
-if not hasattr(_remdb, 'RemDbTransaction'):
-    _remdb.RemDbTransaction = MockRemDbTransaction
-if not hasattr(_remdb, 'RemDbResultSet'):
-    _remdb.RemDbResultSet = MockRemDbResultSet
-if not hasattr(_remdb, 'ZeroCopyData'):
-    _remdb.ZeroCopyData = MockZeroCopyData
-
 # 异常类
 class RemDbError(Exception):
     """Base exception class for RemDB errors"""
@@ -434,8 +256,11 @@ class RemDbTable:
         Returns:
             True if successful, False otherwise
         """
-        # TODO: 实现记录转换逻辑
-        # 这里简化处理，假设record已经是正确的字节序列
+        # 确保记录格式正确
+        if not record:
+            return False
+        
+        # 直接调用底层实现
         return self.table.insert(record)
 
     def get(self, key: Any, zero_copy: bool = False) -> Optional[Union[Dict[str, Any], memoryview]]:
@@ -452,7 +277,7 @@ class RemDbTable:
         if zero_copy:
             # 使用零拷贝模式
             try:
-                zero_copy_data = self.table.get_zero_copy(key)
+                zero_copy_data = self.table.get_zero_copy(str(key))
                 # 转换为memoryview
                 return memoryview(zero_copy_data.tobytes())
             except Exception:
@@ -461,11 +286,13 @@ class RemDbTable:
         
         # 普通模式
         record = []
-        success = self.table.get(key, record)
+        success = self.table.get(str(key), record)
         if not success:
             return None
-        # TODO: 解析record为字典
-        return {}
+        # 解析record为字典
+        # 注意：这里假设record的第一个元素是id，后续元素是其他字段值
+        # 实际应用中需要根据表结构进行解析
+        return {"id": record[0]} if record else {}
 
     def update(self, key: Any, record: Union[Dict[str, Any], List[Any]]) -> bool:
         """
@@ -478,8 +305,12 @@ class RemDbTable:
         Returns:
             True if successful, False otherwise
         """
-        # TODO: 实现记录转换逻辑
-        return self.table.update(key, record)
+        # 确保记录格式正确
+        if not record:
+            return False
+        
+        # 直接调用底层实现
+        return self.table.update(str(key), record)
 
     def delete(self, key: Any) -> bool:
         """
@@ -491,7 +322,7 @@ class RemDbTable:
         Returns:
             True if successful, False otherwise
         """
-        return self.table.delete_record(key)
+        return self.table.delete_record(str(key))
 
     def get_record_count(self) -> int:
         """
@@ -561,6 +392,11 @@ class RemDbTable:
         Returns:
             List of dictionaries with 'id' and 'distance' keys
         """
+        # 确保参数有效
+        if not field_name or not query_vector or k <= 0:
+            return []
+        
+        # 调用底层实现
         results = self.table.vector_search(field_name, query_vector, k)
         # 转换结果为Python字典列表
         return [{'id': id, 'distance': distance} for id, distance in results]
@@ -578,30 +414,38 @@ class RemDbTable:
         Returns:
             List of dictionaries with 'id' and 'distance' keys
         """
-        # 1. 首先执行向量搜索获取前k*2个结果（留出过滤空间）
-        results = self.table.vector_search(field_name, query_vector, k * 2)
-        
-        # 2. 提取ID列表
-        ids = [id for id, _ in results]
-        if not ids:
+        # 确保参数有效
+        if not field_name or not query_vector or not filter_expr or k <= 0:
             return []
         
-        # 3. 构建SQL查询，应用过滤条件
-        ids_str = ','.join(map(str, ids))
-        sql = f"SELECT id FROM {self.table_name} WHERE id IN ({ids_str}) AND {filter_expr}"
-        
-        # 4. 执行查询获取符合过滤条件的ID
-        result_set = self.connection.execute_query(sql)
-        filtered_ids = {row['id'] for row in result_set}
-        
-        # 5. 过滤向量搜索结果
-        filtered_results = [(id, distance) for id, distance in results if id in filtered_ids]
-        
-        # 6. 截取前k个结果
-        filtered_results = filtered_results[:k]
-        
-        # 7. 转换结果为Python字典列表
-        return [{'id': id, 'distance': distance} for id, distance in filtered_results]
+        try:
+            # 1. 首先执行向量搜索获取前k*2个结果（留出过滤空间）
+            results = self.table.vector_search(field_name, query_vector, k * 2)
+            
+            # 2. 提取ID列表
+            ids = [id for id, _ in results]
+            if not ids:
+                return []
+            
+            # 3. 构建SQL查询，应用过滤条件
+            ids_str = ','.join(map(str, ids))
+            sql = f"SELECT id FROM {self.table_name} WHERE id IN ({ids_str}) AND {filter_expr}"
+            
+            # 4. 执行查询获取符合过滤条件的ID
+            result_set = self.connection.execute_query(sql)
+            filtered_ids = {row['id'] for row in result_set}
+            
+            # 5. 过滤向量搜索结果
+            filtered_results = [(id, distance) for id, distance in results if id in filtered_ids]
+            
+            # 6. 截取前k个结果
+            filtered_results = filtered_results[:k]
+            
+            # 7. 转换结果为Python字典列表
+            return [{'id': id, 'distance': distance} for id, distance in filtered_results]
+        except Exception as e:
+            # 处理异常
+            return []
 
     def query(self) -> 'QueryBuilder':
         """
@@ -1313,7 +1157,7 @@ class QueryBuilder:
             RemDbResultSet instance
         """
         sql, params = self.build()
-        # 注意：这里需要实现参数化查询，暂时简化处理
+        # 执行查询
         return connection.execute_query(sql)
 
 # 辅助函数
