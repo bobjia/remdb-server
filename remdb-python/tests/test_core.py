@@ -107,9 +107,10 @@ class TestZeroCopy(unittest.TestCase):
         with remdb.connect(self.db_path) as db:
             try:
                 table = db.get_table("test_table")
+                # 先插入一条记录
+                table.insert({"id": "1", "name": "test", "value": "123"})
                 # 测试零拷贝模式
-                # 注意：这里假设表中已经有一条id为1的记录
-                result = table.get(1, zero_copy=True)
+                result = table.get("1", zero_copy=True)
                 # 零拷贝模式应该返回memoryview
                 self.assertIsInstance(result, (dict, memoryview))
             except remdb.NotFoundError:
