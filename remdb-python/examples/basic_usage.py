@@ -91,13 +91,28 @@ try:
         # 事务处理示例
         print("\nTesting transaction...")
         try:
-            with db.begin_transaction() as tx:
-                print("Transaction started")
-                # 在事务中执行操作
-                # 这里可以执行多个操作，它们会作为一个原子操作执行
-                print("Transaction committed successfully")
-        except Exception as e:
+            # 尝试开始事务
+            print("Attempting to begin transaction...")
+            tx = db.begin_transaction()
+            print("Transaction started")
+            
+            # 在事务中执行实际的数据库操作
+            # 插入一条新记录
+            insert_sql = "INSERT INTO sensor_data (id, value, timestamp) VALUES (2, 26.5, 1620000002)"
+            db.execute_query(insert_sql)
+            print("Inserted record in transaction")
+            
+            # 提交事务
+            tx.commit()
+            print("Transaction committed successfully")
+        except remdb.TransactionError as e:
             print(f"Transaction failed: {e}")
+            print("Note: Transaction support may not be available in local file mode")
+            print("This is expected behavior in some RemDB configurations")
+        except Exception as e:
+            print(f"Unexpected error during transaction: {e}")
+            import traceback
+            traceback.print_exc()
         
 finally:
     # 清理临时文件
