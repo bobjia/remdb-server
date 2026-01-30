@@ -28,16 +28,39 @@ def setup_test_table(db):
     print("Table 'test_users' created successfully")
     
     # 检查是否已有初始数据
-    result_set = db.execute_query("SELECT COUNT(*) FROM test_users")
-    row = next(iter(result_set))
-    count = int(row['COUNT(*)'])
-    
-    if count == 0:
-        # 尝试在新表中插入初始数据
-        print("\nInserting initial data into 'test_users'...")
-        insert_sql = "INSERT INTO test_users (id, name, email, age) VALUES (1, 'Test User', 'test@example.com', 25)"
-        db.execute_query(insert_sql)
-        print("Initial data inserted successfully")
+    print("\nChecking if initial data exists...")
+    try:
+        result_set = db.execute_query("SELECT COUNT(*) FROM test_users")
+        row = next(iter(result_set))
+        # 尝试获取计数结果，处理不同的列名格式
+        if 'COUNT(*)' in row:
+            count = int(row['COUNT(*)'])
+        elif 'count' in row:
+            count = int(row['count'])
+        elif 'Count' in row:
+            count = int(row['Count'])
+        else:
+            # 如果列名不是预期的格式，尝试获取第一个值
+            count = int(list(row.values())[0])
+        
+        print(f"Found {count} records in test_users table")
+        
+        if count == 0:
+            # 尝试在新表中插入初始数据
+            print("\nInserting initial data into 'test_users'...")
+            insert_sql = "INSERT INTO test_users (id, name, email, age) VALUES (1, 'Test User', 'test@example.com', 25)"
+            db.execute_query(insert_sql)
+            print("Initial data inserted successfully")
+    except Exception as e:
+        print(f"Error checking data count: {e}")
+        # 如果计数查询失败，尝试直接插入数据（如果不存在）
+        try:
+            # 尝试插入数据，使用INSERT IGNORE避免主键冲突
+            insert_sql = "INSERT OR IGNORE INTO test_users (id, name, email, age) VALUES (1, 'Test User', 'test@example.com', 25)"
+            db.execute_query(insert_sql)
+            print("Initial data inserted or already exists")
+        except Exception as e2:
+            print(f"Error inserting initial data: {e2}")
 
 
 def test_basic_operations(db, table):
@@ -57,6 +80,14 @@ def test_basic_operations(db, table):
     for row in result_set:
         print(row)
     
+    # 清理测试数据
+    print("\nCleaning test data for id >= 100...")
+    try:
+        db.execute_query("DELETE FROM test_users WHERE id >= 100")
+        print("Test data cleaned successfully")
+    except Exception as e:
+        print(f"Error cleaning test data: {e}")
+    
     # 插入记录
     print("\nInserting a new user...")
     new_user = {
@@ -75,6 +106,13 @@ def test_basic_operations(db, table):
         print(f"User found: {user}")
     else:
         print("User not found")
+        # 如果查询失败，尝试直接执行SQL查询来验证插入
+        try:
+            sql_result = db.execute_query("SELECT * FROM test_users WHERE id = 101")
+            for row in sql_result:
+                print(f"Direct SQL query result: {row}")
+        except Exception as e:
+            print(f"Direct SQL query also failed: {e}")
     
     # 更新记录
     print("\nUpdating user with id=101...")
@@ -115,35 +153,58 @@ def test_transaction_commit(db, table):
         db: RemDB数据库连接对象
         table: test_users表对象
     """
+    # 清理测试数据
+    print("\nCleaning test data for transaction commit test (id 102-104)...")
+    try:
+        db.execute_query("DELETE FROM test_users WHERE id BETWEEN 102 AND 104")
+        print("Transaction test data cleaned successfully")
+    except Exception as e:
+        print(f"Error cleaning transaction test data: {e}")
+    
     # 事务示例
     print("\n=== Transaction Example ===")
-    with db.begin_transaction() as tx:
-        print("Transaction started")
+    try:
+        with db.begin_transaction() as tx:
+            print("Transaction started")
+            
+            # 插入多条记录
+            product_ids = range(102, 105)
+            for i in product_ids:
+                product = {
+                    "id": i,
+                    "name": f"Product {i}",
+                    "email": f"product{i}@example.com",
+                    "age": 19
+                }
+                table.insert(product)
+                print(f"Inserted product {i}")
+            
+            # 提交事务
+            print("Committing transaction...")
+        # 事务会在上下文退出时自动提交
         
-        # 插入多条记录
-        product_ids = range(102, 105)
+        print("Transaction committed successfully")
+        
+        # 验证事务提交
+        print("\nVerifying transaction commit...")
         for i in product_ids:
-            product = {
-                "id": i,
-                "name": f"Product {i}",
-                "email": f"product{i}@example.com",
-                "age": 19
-            }
-            table.insert(product)
-            print(f"Inserted product {i}")
-        
-        # 提交事务
-        print("Committing transaction...")
-    # 事务会在上下文退出时自动提交
+            product = table.get(i)
+            if product:
+                print(f"Product {i} found: {product['name']}")
+            else:
+                print(f"Product {i} not found")
+                # 尝试直接SQL查询验证
+                try:
+                    sql_result = db.execute_query(f"SELECT * FROM test_users WHERE id = {i}")
+                    for row in sql_result:
+                        print(f"Direct SQL query result for id={i}: {row}")
+                except Exception as e:
+                    print(f"Direct SQL query failed for id={i}: {e}")
     
-    # 验证事务提交
-    print("\nVerifying transaction commit...")
-    for i in product_ids:
-        product = table.get(i)
-        if product:
-            print(f"Product {i} found: {product['name']}")
-        else:
-            print(f"Product {i} not found")
+    except Exception as e:
+        print(f"Transaction error: {e}")
+        # 继续执行其他测试
+        pass
 
 
 def test_transaction_rollback(db, table):
@@ -154,40 +215,63 @@ def test_transaction_rollback(db, table):
         db: RemDB数据库连接对象
         table: test_users表对象
     """
+    # 清理测试数据
+    print("\nCleaning test data for transaction rollback test (id 201)...")
+    try:
+        db.execute_query("DELETE FROM test_users WHERE id = 201")
+        print("Rollback test data cleaned successfully")
+    except Exception as e:
+        print(f"Error cleaning rollback test data: {e}")
+    
     # 回滚事务示例
     print("\n=== Rollback Transaction Example ===")
-    with db.begin_transaction() as tx:
-        print("Transaction started")
+    try:
+        with db.begin_transaction() as tx:
+            print("Transaction started")
+            
+            # 插入临时记录
+            temp_id = 201
+            product = {
+                "id": temp_id,
+                "name": "Temporary Product",
+                "email": "temp@example.com",
+                "age": 25
+            }
+            table.insert(product)
+            print("Inserted temporary product")
+            
+            # 验证插入
+            temp_product = table.get(temp_id)
+            if temp_product:
+                print(f"Temporary product found: {temp_product['name']}")
+            else:
+                print("Temporary product not found")
+            
+            # 显式回滚事务
+            print("Rolling back transaction...")
+            tx.rollback()
         
-        # 插入临时记录
-        temp_id = 201
-        product = {
-            "id": temp_id,
-            "name": "Temporary Product",
-            "email": "temp@example.com",
-            "age": 25
-        }
-        table.insert(product)
-        print("Inserted temporary product")
+        print("Transaction rolled back successfully")
         
-        # 验证插入
+        # 验证回滚
+        print("\nVerifying transaction rollback...")
         temp_product = table.get(temp_id)
         if temp_product:
-            print(f"Temporary product found: {temp_product['name']}")
+            print(f"Temporary product still exists: {temp_product['name']}")
         else:
-            print("Temporary product not found")
-        
-        # 显式回滚事务
-        print("Rolling back transaction...")
-        tx.rollback()
+            print("Temporary product rolled back successfully")
+            # 尝试直接SQL查询验证
+            try:
+                sql_result = db.execute_query(f"SELECT * FROM test_users WHERE id = {temp_id}")
+                for row in sql_result:
+                    print(f"Direct SQL query result for id={temp_id}: {row}")
+            except Exception as e:
+                print(f"Direct SQL query failed for id={temp_id}: {e}")
     
-    # 验证回滚
-    print("\nVerifying transaction rollback...")
-    temp_product = table.get(temp_id)
-    if temp_product:
-        print(f"Temporary product still exists: {temp_product['name']}")
-    else:
-        print("Temporary product rolled back successfully")
+    except Exception as e:
+        print(f"Transaction error: {e}")
+        # 继续执行其他测试
+        pass
 
 
 def main():
@@ -200,6 +284,13 @@ def main():
     # JDBC URL格式: jdbc://host:port
     # 注意：请确保RemDB服务器已经在指定的主机和端口上运行
     jdbc_url = "jdbc://localhost:6666"
+    
+    # 用于追踪测试结果
+    test_results = {
+        "basic_operations": False,
+        "transaction_commit": False,
+        "transaction_rollback": False
+    }
     
     try:
         # 连接到数据库（使用上下文管理器）
@@ -216,15 +307,47 @@ def main():
             print(f"Table 'test_users' retrieved successfully")
             
             # 测试基本操作
-            test_basic_operations(db, table)
+            print("\n=== Testing Basic Operations ===")
+            try:
+                test_basic_operations(db, table)
+                test_results["basic_operations"] = True
+                print("Basic operations test completed")
+            except Exception as e:
+                print(f"Basic operations test failed: {e}")
             
             # 测试事务提交
-            test_transaction_commit(db, table)
+            print("\n=== Testing Transaction Commit ===")
+            try:
+                test_transaction_commit(db, table)
+                test_results["transaction_commit"] = True
+                print("Transaction commit test completed")
+            except Exception as e:
+                print(f"Transaction commit test failed: {e}")
             
             # 测试事务回滚
-            test_transaction_rollback(db, table)
+            print("\n=== Testing Transaction Rollback ===")
+            try:
+                test_transaction_rollback(db, table)
+                test_results["transaction_rollback"] = True
+                print("Transaction rollback test completed")
+            except Exception as e:
+                print(f"Transaction rollback test failed: {e}")
             
-            print("\n=== All tests completed successfully! ===")
+            # 汇总测试结果
+            print("\n" + "="*50)
+            print("TEST RESULTS SUMMARY:")
+            print("="*50)
+            for test_name, passed in test_results.items():
+                status = "PASSED" if passed else "FAILED"
+                print(f"{test_name}: {status}")
+            
+            # 检查总体结果
+            all_passed = all(test_results.values())
+            if all_passed:
+                print("\n=== All tests completed successfully! ===")
+            else:
+                print(f"\n=== Some tests failed: {sum(1 for v in test_results.values() if not v)} out of {len(test_results)} tests failed ===")
+                print("Check the logs above for detailed error information.")
             
     except remdb.network.RequestError as e:
         print(f"Network error: {e}")

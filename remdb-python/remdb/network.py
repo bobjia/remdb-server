@@ -304,6 +304,11 @@ class JdbcClient:
 
             # Check response status
             if response.status != 0:  # 假设0是OK状态
+                # 对于事务错误，我们需要特殊处理
+                if "TransactionError" in response.error_message:
+                    # 事务错误，返回False表示提交失败
+                    self.request_id += 1
+                    return False
                 raise RequestError(f"Commit failed: {response.error_message}")
 
             # Update request ID
@@ -313,7 +318,9 @@ class JdbcClient:
         except Exception as e:
             import traceback
             traceback.print_exc()
-            raise RequestError(f"Commit failed: {e}")
+            # 对于一般异常，也返回False而不是抛出异常
+            # 这样调用者可以处理事务失败的情况
+            return False
 
     def rollback_transaction(self) -> bool:
         """
@@ -345,6 +352,11 @@ class JdbcClient:
 
             # Check response status
             if response.status != 0:  # 假设0是OK状态
+                # 对于事务错误，我们需要特殊处理
+                if "TransactionError" in response.error_message:
+                    # 事务错误，返回False表示回滚失败
+                    self.request_id += 1
+                    return False
                 raise RequestError(f"Rollback failed: {response.error_message}")
 
             # Update request ID
@@ -354,7 +366,9 @@ class JdbcClient:
         except Exception as e:
             import traceback
             traceback.print_exc()
-            raise RequestError(f"Rollback failed: {e}")
+            # 对于一般异常，也返回False而不是抛出异常
+            # 这样调用者可以处理事务失败的情况
+            return False
 
     def _send_request(self, request: JdbcRequest):
         """

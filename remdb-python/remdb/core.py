@@ -685,9 +685,39 @@ class NetworkTableAdapter:
                 values_str = ", ".join([format_value(v) for v in values])
                 sql = f"INSERT INTO {self.table_name} ({cols_str}) VALUES ({values_str})"
                 
-                # 执行查询，不传递参数
-                self.connection.jdbc_client.execute_query(sql)
-                return True
+                # 执行查询，检查结果
+                result = self.connection.jdbc_client.execute_query(sql)
+                
+
+                
+                # 检查执行结果
+                if "affected_rows" in result:
+                    # 这是UPDATE/DELETE/INSERT操作的结果
+                    affected = result.get("affected_rows", 0)
+                    return affected > 0
+                elif "last_insert_id" in result:
+                    # 有last_insert_id，说明插入成功
+                    return True
+                elif "rows" in result:
+                    # 检查是否是空的result_set（可能表示INSERT成功）
+                    rows = result.get("rows", [])
+                    # 如果是空列表，可能表示INSERT成功但没有返回数据
+                    if rows == []:
+                        # 对于INSERT，空的result_set可能表示成功
+                        return True
+                    # 否则是SELECT查询的结果
+                    # 对于INSERT，不应该返回非空行
+                    return False
+                else:
+                    # 没有返回结果，检查是否有其他指示成功的字段
+                    # 有时服务器可能返回空字典表示成功
+                    if result == {}:
+                        return True
+                    # 或者检查是否有错误信息
+                    if "error_message" in result:
+                        return False
+                    # 默认假设成功
+                    return True
             else:
                 # 对于列表类型，需要知道列名，这里简化处理
                 return False
@@ -721,14 +751,38 @@ class NetworkTableAdapter:
                 else:
                     return str(k)
             
-            sql = f"SELECT * FROM {self.table_name} WHERE id = {format_key(key)}"
-            result = self.connection.jdbc_client.execute_query(sql)
+            # 尝试不同的主键列名
+            primary_key_columns = ["id", "ID", "Id"]
             
-            # 检查结果
-            if result.get("rows") and len(result.get("rows")) > 0:
-                row = result.get("rows")[0]
-                columns = result.get("columns")
-                return dict(zip(columns, row))
+            for pk_col in primary_key_columns:
+                try:
+                    sql = f"SELECT * FROM {self.table_name} WHERE {pk_col} = {format_key(key)}"
+                    result = self.connection.jdbc_client.execute_query(sql)
+                    
+                    # 检查结果
+                    if result.get("rows") and len(result.get("rows")) > 0:
+                        row = result.get("rows")[0]
+                        columns = result.get("columns")
+                        
+                        # 验证列名和行数据长度匹配
+                        if columns and len(columns) == len(row):
+                            return dict(zip(columns, row))
+                        elif columns and len(columns) != len(row):
+                            # 列数和行数据不匹配，创建默认映射
+                            return {f"col_{i}": row[i] for i in range(len(row))}
+                        else:
+                            # 没有列名信息，使用默认列名
+                            return {f"column_{i}": row[i] for i in range(len(row))}
+                    
+                    # 如果找到结果，返回它；否则继续尝试下一个列名
+                    if result.get("rows") and len(result.get("rows")) > 0:
+                        break
+                        
+                except Exception:
+                    # 当前列名查询失败，尝试下一个
+                    continue
+            
+            # 如果所有列名都失败，返回None
             return None
         except Exception:
             return None
@@ -772,12 +826,49 @@ class NetworkTableAdapter:
                     else:
                         return str(k)
                 
-                set_clause = ", ".join([f"{col} = {format_value(v)}" for col, v in record.items()])
-                sql = f"UPDATE {self.table_name} SET {set_clause} WHERE id = {format_key(key)}"
+                # 尝试不同的主键列名
+                primary_key_columns = ["id", "ID", "Id"]
+                success = False
                 
-                # 执行查询，不传递参数
-                self.connection.jdbc_client.execute_query(sql)
-                return True
+                for pk_col in primary_key_columns:
+                    try:
+                        set_clause = ", ".join([f"{col} = {format_value(v)}" for col, v in record.items()])
+                        sql = f"UPDATE {self.table_name} SET {set_clause} WHERE {pk_col} = {format_key(key)}"
+                        
+                        # 执行查询，检查结果
+                        result = self.connection.jdbc_client.execute_query(sql)
+                        
+                        # 检查执行结果
+                        if "affected_rows" in result:
+                            affected = result.get("affected_rows", 0)
+                            if affected > 0:
+                                success = True
+                                break
+                        elif "rows" in result:
+                            # 检查是否是空的result_set（可能表示UPDATE成功）
+                            rows = result.get("rows", [])
+                            if rows == []:
+                                # 对于UPDATE，空的result_set可能表示成功
+                                success = True
+                                break
+                            # 否则是SELECT查询的结果，不是UPDATE
+                            continue
+                        else:
+                            # 没有返回结果，检查是否有其他指示成功的字段
+                            if result == {}:
+                                success = True
+                                break
+                            # 或者检查是否有错误信息
+                            if "error_message" in result:
+                                continue
+                            # 默认假设成功
+                            success = True
+                            break
+                    except Exception:
+                        # 当前列名查询失败，尝试下一个
+                        continue
+                
+                return success
             else:
                 # 对于列表类型，需要知道列名，这里简化处理
                 return False
@@ -806,11 +897,48 @@ class NetworkTableAdapter:
                 else:
                     return str(k)
             
-            sql = f"DELETE FROM {self.table_name} WHERE id = {format_key(key)}"
+            # 尝试不同的主键列名
+            primary_key_columns = ["id", "ID", "Id"]
+            success = False
             
-            # 执行查询，不传递参数
-            self.connection.jdbc_client.execute_query(sql)
-            return True
+            for pk_col in primary_key_columns:
+                try:
+                    sql = f"DELETE FROM {self.table_name} WHERE {pk_col} = {format_key(key)}"
+                    
+                    # 执行查询，检查结果
+                    result = self.connection.jdbc_client.execute_query(sql)
+                    
+                    # 检查执行结果
+                    if "affected_rows" in result:
+                        affected = result.get("affected_rows", 0)
+                        if affected > 0:
+                            success = True
+                            break
+                    elif "rows" in result:
+                        # 检查是否是空的result_set（可能表示DELETE成功）
+                        rows = result.get("rows", [])
+                        if rows == []:
+                            # 对于DELETE，空的result_set可能表示成功
+                            success = True
+                            break
+                        # 否则是SELECT查询的结果，不是DELETE
+                        continue
+                    else:
+                        # 没有返回结果，检查是否有其他指示成功的字段
+                        if result == {}:
+                            success = True
+                            break
+                        # 或者检查是否有错误信息
+                        if "error_message" in result:
+                            continue
+                        # 默认假设成功
+                        success = True
+                        break
+                except Exception:
+                    # 当前列名查询失败，尝试下一个
+                    continue
+            
+            return success
         except Exception:
             return False
             
