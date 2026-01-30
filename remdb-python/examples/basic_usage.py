@@ -37,13 +37,14 @@ try:
             
             # 插入记录
             print("Inserting a record...")
-            record = {
-                "id": 1,
-                "value": 23.5,
-                "timestamp": 1620000000
-            }
-            success = table.insert(record)
-            print(f"Insert successful: {success}")
+            # 使用SQL INSERT语句直接插入数据
+            insert_sql = "INSERT INTO sensor_data (id, value, timestamp) VALUES (1, 23.5, 1620000000)"
+            try:
+                result = db.execute_query(insert_sql)
+                print(f"Insert result: {result}")
+                print("Insert successful")
+            except Exception as e:
+                print(f"Error inserting record: {e}")
             
             # 获取记录（普通模式）
             print("Getting record with id=1...")
@@ -57,13 +58,14 @@ try:
             
             # 更新记录
             print("Updating record with id=1...")
-            updated_record = {
-                "id": 1,
-                "value": 25.0,
-                "timestamp": 1620000001
-            }
-            success = table.update(1, updated_record)
-            print(f"Update successful: {success}")
+            # 使用SQL UPDATE语句直接更新数据
+            update_sql = "UPDATE sensor_data SET value = 25.0, timestamp = 1620000001 WHERE id = 1"
+            try:
+                result = db.execute_query(update_sql)
+                print(f"Update result: {result}")
+                print("Update successful")
+            except Exception as e:
+                print(f"Error updating record: {e}")
             
             # 删除记录
             print("Deleting record with id=1...")
