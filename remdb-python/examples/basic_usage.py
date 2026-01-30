@@ -15,11 +15,25 @@ try:
     with remdb.connect(db_path) as db:
         print("Connected successfully!")
         
-        # 尝试获取表（这里假设数据库中已经有一个名为"sensor_data"的表）
+        # 尝试获取表，如果不存在则创建
         try:
             print("Getting table 'sensor_data'...")
             table = db.get_table("sensor_data")
             print(f"Table found with {table.get_record_count()} records")
+        except remdb.NotFoundError:
+            print("Table 'sensor_data' not found, creating it...")
+            # 尝试创建表
+            try:
+                # 使用更简单的SQL语法
+                create_table_sql = "CREATE TABLE sensor_data (id INTEGER PRIMARY KEY, value REAL, timestamp INTEGER)"
+                result = db.execute_query(create_table_sql)
+                print(f"Table creation result: {result}")
+                # 重新获取表
+                table = db.get_table("sensor_data")
+                print("Table created successfully")
+            except Exception as e:
+                print(f"Error creating table: {e}")
+                raise
             
             # 插入记录
             print("Inserting a record...")
