@@ -547,8 +547,20 @@ public:
         if (err == REMDB_SUCCESS) {
             connected_ = true;
         } else {
-            // If remdb_get_global fails, try remdb_init_global with minimal configuration
-            ::RemDbConfig config;
+            // If remdb_get_global fails, try remdb_init_global with a struct that matches Rust's layout
+            // Create a struct that matches the Rust RemDbConfig layout exactly
+            struct RustRemDbConfig {
+                const void* tables;
+                size_t tables_count;
+                const void* time_series_tables;
+                size_t time_series_tables_count;
+                size_t total_memory;
+                uint8_t low_power_mode_supported;
+                int32_t low_power_max_records;
+                const void* ha_config;
+            };
+            
+            RustRemDbConfig config;
             config.tables = nullptr;
             config.tables_count = 0;
             config.time_series_tables = nullptr;
@@ -556,6 +568,7 @@ public:
             config.total_memory = 1024 * 1024 * 1024; // 1GB
             config.low_power_mode_supported = 0;
             config.low_power_max_records = -1;
+            config.ha_config = nullptr;
             
             err = remdb_init_global((const ::RemDbConfig*)&config, &db_handle_);
             if (err == REMDB_SUCCESS) {

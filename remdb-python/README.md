@@ -34,6 +34,9 @@ Python bindings for RemDB, a lightweight embedded database optimized for resourc
    ```bash
    cd remdb-python
    pip install -e .
+
+   // use this in windows to build the extension
+   python setup.py build_ext --inplace
    ```
 
 ### From PyPI (Coming Soon)
