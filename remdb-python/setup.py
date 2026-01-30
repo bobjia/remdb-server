@@ -18,7 +18,7 @@ ext_modules = [
         sources=['src/remdb_extension.cpp'],
         include_dirs=['src', pybind11_include_dir, remdb_include_dir],
         library_dirs=[remdb_lib_dir],
-        libraries=['remdb'],
+        libraries=['remdb', 'ws2_32', 'advapi32', 'kernel32', 'ntdll', 'bcrypt', 'userenv'],
         language='c++'
     )
 ]

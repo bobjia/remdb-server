@@ -170,6 +170,32 @@ class RemDbConnection:
         if not self.connected:
             raise RemDbError("Not connected to database")
 
+        # 处理 COUNT(*) 查询
+        import re
+        count_match = re.search(r'SELECT\s+COUNT\(\*\)\s+FROM\s+([a-zA-Z0-9_]+)', sql, re.IGNORECASE)
+        if count_match and not self.is_network_connection:
+            # 提取表名
+            table_name = count_match.group(1)
+            try:
+                # 获取表实例
+                table = self.get_table(table_name)
+                # 获取实际记录数
+                count = table.get_record_count()
+                # 创建一个模拟的结果集
+                class MockResultSet:
+                    def get_columns(self):
+                        return ["COUNT(*)"]
+                    def get_rows_count(self):
+                        return 1
+                    def get_row(self, index):
+                        if index == 0:
+                            return {"COUNT(*)": count}
+                        raise IndexError("Row index out of range")
+                return RemDbResultSet(MockResultSet())
+            except Exception:
+                # 如果失败，回退到原始SQL执行
+                pass
+
         if self.is_network_connection:
             # 网络连接
             try:

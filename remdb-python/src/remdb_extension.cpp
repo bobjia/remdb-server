@@ -6,7 +6,13 @@
 #include <map>
 #include <memory>
 
+// Include RemDB C API
+#include "remdb.h"
+
 namespace py = pybind11;
+
+// Forward declaration
+class RemDb;
 
 class ZeroCopyData {
 private:
@@ -23,87 +29,364 @@ public:
 class RemDbTable {
 private:
     std::string table_name_;
-    std::map<std::string, std::vector<std::string>> records_;
+    RemDbHandle db_handle_;
+    size_t table_id_;
 
 public:
-    RemDbTable(const std::string& table_name) : table_name_(table_name) {}
+    RemDbTable(const std::string& table_name, RemDbHandle db_handle, size_t table_id) 
+        : table_name_(table_name), db_handle_(db_handle), table_id_(table_id) {}
     
-    bool insert(const std::map<std::string, std::string>& record) {
-        if (record.find("id") != record.end()) {
-            records_[record.at("id")] = std::vector<std::string>();
+    bool execute_sql(const std::string& sql) {
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set) {
+            remdb_free_result_set(result_set);
             return true;
         }
+        
+        if (result_set) {
+            remdb_free_result_set(result_set);
+        }
+        
         return false;
+    }
+    
+    bool insert(const std::map<std::string, std::string>& record) {
+        if (record.empty()) {
+            return false;
+        }
+        
+        // Build SQL INSERT statement
+        std::string sql = "INSERT INTO " + table_name_ + " (";
+        std::string columns;
+        std::string values;
+        
+        for (const auto& pair : record) {
+            if (!columns.empty()) {
+                columns += ", ";
+                values += ", ";
+            }
+            columns += pair.first;
+            values += "'" + pair.second + "'";
+        }
+        
+        sql += columns + ") VALUES (" + values + ")";
+        
+        return execute_sql(sql);
     }
     
     bool insert(const std::vector<std::string>& record) {
-        if (!record.empty()) {
-            records_[record[0]] = record;
-            return true;
+        if (record.empty()) {
+            return false;
         }
-        return false;
+        
+        // Build SQL INSERT statement
+        std::string sql = "INSERT INTO " + table_name_ + " VALUES (";
+        
+        for (size_t i = 0; i < record.size(); i++) {
+            if (i > 0) {
+                sql += ", ";
+            }
+            sql += "'" + record[i] + "'";
+        }
+        
+        sql += ")";
+        
+        return execute_sql(sql);
     }
     
     bool get(const std::string& key, std::vector<std::string>& record) {
-        if (records_.find(key) != records_.end()) {
-            record = records_[key];
+        // Build SQL SELECT statement
+        std::string sql = "SELECT * FROM " + table_name_ + " WHERE 1=1 LIMIT 1";
+        
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set && result_set->rows_count > 0) {
+            const ::RemDbResultRow* row = &result_set->rows[0];
+            record.clear();
+            
+            for (size_t j = 0; j < row->values_count; j++) {
+                const ::RemDbTypedValue* value = &row->values[j];
+                std::string value_str;
+                
+                // Convert value based on data type
+                switch (value->data_type) {
+                    case REMDB_TYPE_UINT8:
+                        value_str = std::to_string(value->value.u8);
+                        break;
+                    case REMDB_TYPE_UINT16:
+                        value_str = std::to_string(value->value.u16);
+                        break;
+                    case REMDB_TYPE_UINT32:
+                        value_str = std::to_string(value->value.u32);
+                        break;
+                    case REMDB_TYPE_UINT64:
+                        value_str = std::to_string(value->value.u64);
+                        break;
+                    case REMDB_TYPE_FLOAT32:
+                        value_str = std::to_string(value->value.float32);
+                        break;
+                    case REMDB_TYPE_FLOAT64:
+                        value_str = std::to_string(value->value.float64);
+                        break;
+                    case REMDB_TYPE_BOOL:
+                        value_str = value->value.boolean ? "true" : "false";
+                        break;
+                    case REMDB_TYPE_TIMESTAMP:
+                        value_str = std::to_string(value->value.timestamp);
+                        break;
+                    case REMDB_TYPE_STRING:
+                        value_str = std::string(reinterpret_cast<const char*>(value->value.string));
+                        // Remove trailing null character
+                        value_str = value_str.substr(0, value_str.find('\0'));
+                        break;
+                    default:
+                        value_str = "";
+                        break;
+                }
+                
+                record.push_back(value_str);
+            }
+            
+            remdb_free_result_set(result_set);
             return true;
         }
+        
+        if (result_set) {
+            remdb_free_result_set(result_set);
+        }
+        
         return false;
     }
     
     std::shared_ptr<ZeroCopyData> get_zero_copy(const std::string& key) {
-        if (records_.find(key) != records_.end()) {
+        // Build SQL SELECT statement
+        std::string sql = "SELECT * FROM " + table_name_ + " WHERE 1=1 LIMIT 1";
+        
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set && result_set->rows_count > 0) {
+            // Simple implementation: convert first row to string
+            const ::RemDbResultRow* row = &result_set->rows[0];
             std::string data;
-            for (const auto& value : records_[key]) {
-                data += value + ",";
+            
+            for (size_t j = 0; j < row->values_count; j++) {
+                const ::RemDbTypedValue* value = &row->values[j];
+                std::string value_str;
+                
+                // Convert value based on data type
+                switch (value->data_type) {
+                    case REMDB_TYPE_UINT8:
+                        value_str = std::to_string(value->value.u8);
+                        break;
+                    case REMDB_TYPE_UINT16:
+                        value_str = std::to_string(value->value.u16);
+                        break;
+                    case REMDB_TYPE_UINT32:
+                        value_str = std::to_string(value->value.u32);
+                        break;
+                    case REMDB_TYPE_UINT64:
+                        value_str = std::to_string(value->value.u64);
+                        break;
+                    case REMDB_TYPE_FLOAT32:
+                        value_str = std::to_string(value->value.float32);
+                        break;
+                    case REMDB_TYPE_FLOAT64:
+                        value_str = std::to_string(value->value.float64);
+                        break;
+                    case REMDB_TYPE_BOOL:
+                        value_str = value->value.boolean ? "true" : "false";
+                        break;
+                    case REMDB_TYPE_TIMESTAMP:
+                        value_str = std::to_string(value->value.timestamp);
+                        break;
+                    case REMDB_TYPE_STRING:
+                        value_str = std::string(reinterpret_cast<const char*>(value->value.string));
+                        // Remove trailing null character
+                        value_str = value_str.substr(0, value_str.find('\0'));
+                        break;
+                    default:
+                        value_str = "";
+                        break;
+                }
+                
+                if (j > 0) {
+                    data += ",";
+                }
+                data += value_str;
             }
+            
+            remdb_free_result_set(result_set);
             return std::make_shared<ZeroCopyData>(data);
         }
+        
+        if (result_set) {
+            remdb_free_result_set(result_set);
+        }
+        
         return std::make_shared<ZeroCopyData>("");
     }
     
     bool update(const std::string& key, const std::map<std::string, std::string>& record) {
-        if (records_.find(key) != records_.end()) {
-            records_[key] = std::vector<std::string>();
-            return true;
+        if (record.empty()) {
+            return false;
         }
-        return false;
+        
+        // Build SQL UPDATE statement
+        std::string sql = "UPDATE " + table_name_ + " SET ";
+        
+        for (const auto& pair : record) {
+            if (sql.back() != ' ') {
+                sql += ", ";
+            }
+            sql += pair.first + " = '" + pair.second + "'";
+        }
+        
+        // Assume first field is primary key
+        sql += " WHERE 1=1";
+        
+        return execute_sql(sql);
     }
     
     bool update(const std::string& key, const std::vector<std::string>& record) {
-        if (records_.find(key) != records_.end()) {
-            records_[key] = record;
-            return true;
-        }
+        // Not implemented yet
         return false;
     }
     
     bool delete_record(const std::string& key) {
-        if (records_.find(key) != records_.end()) {
-            records_.erase(key);
-            return true;
-        }
-        return false;
+        // Build SQL DELETE statement
+        std::string sql = "DELETE FROM " + table_name_ + " WHERE 1=1";
+        
+        return execute_sql(sql);
     }
     
     int get_record_count() {
-        return static_cast<int>(records_.size());
+        size_t count = 0;
+        enum RemDbError err = remdb_table_get_record_count(db_handle_, table_id_, &count);
+        if (err == REMDB_SUCCESS) {
+            return static_cast<int>(count);
+        }
+        return 0;
     }
     
     py::array get_column_as_numpy(const std::string& column_name) {
-        std::vector<double> values;
-        for (const auto& record : records_) {
-            values.push_back(0.0);
+        // Build SQL SELECT statement
+        std::string sql = "SELECT " + column_name + " FROM " + table_name_;
+        
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set) {
+            std::vector<double> values;
+            
+            for (size_t i = 0; i < result_set->rows_count; i++) {
+                const ::RemDbResultRow* row = &result_set->rows[i];
+                if (row->values_count > 0) {
+                    const ::RemDbTypedValue* value = &row->values[0];
+                    double double_value = 0.0;
+                    
+                    // Convert value based on data type
+                    switch (value->data_type) {
+                        case REMDB_TYPE_UINT8:
+                            double_value = static_cast<double>(value->value.u8);
+                            break;
+                        case REMDB_TYPE_UINT16:
+                            double_value = static_cast<double>(value->value.u16);
+                            break;
+                        case REMDB_TYPE_UINT32:
+                            double_value = static_cast<double>(value->value.u32);
+                            break;
+                        case REMDB_TYPE_UINT64:
+                            double_value = static_cast<double>(value->value.u64);
+                            break;
+                        case REMDB_TYPE_FLOAT32:
+                            double_value = static_cast<double>(value->value.float32);
+                            break;
+                        case REMDB_TYPE_FLOAT64:
+                            double_value = value->value.float64;
+                            break;
+                        case REMDB_TYPE_BOOL:
+                            double_value = value->value.boolean ? 1.0 : 0.0;
+                            break;
+                        case REMDB_TYPE_TIMESTAMP:
+                            double_value = static_cast<double>(value->value.timestamp);
+                            break;
+                        default:
+                            double_value = 0.0;
+                            break;
+                    }
+                    
+                    values.push_back(double_value);
+                }
+            }
+            
+            remdb_free_result_set(result_set);
+            return py::array_t<double>(values.size(), values.data());
         }
+        
+        if (result_set) {
+            remdb_free_result_set(result_set);
+        }
+        
+        std::vector<double> values;
         return py::array_t<double>(values.size(), values.data());
     }
     
     std::vector<std::pair<std::string, double>> vector_search(const std::string& field_name, const std::vector<double>& query_vector, int k) {
         std::vector<std::pair<std::string, double>> results;
-        for (int i = 0; i < k && i < static_cast<int>(records_.size()); i++) {
-            results.emplace_back(std::to_string(i), 0.0);
+        
+        // Build SQL SELECT statement
+        std::string sql = "SELECT *, DISTANCE(" + field_name + ", [";
+        
+        for (size_t i = 0; i < query_vector.size(); i++) {
+            if (i > 0) {
+                sql += ", ";
+            }
+            sql += std::to_string(query_vector[i]);
         }
+        
+        sql += ") AS distance FROM " + table_name_ + " ORDER BY distance LIMIT " + std::to_string(k);
+        
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set) {
+            for (size_t i = 0; i < result_set->rows_count; i++) {
+                const ::RemDbResultRow* row = &result_set->rows[i];
+                if (row->values_count > 1) {
+                    // Assume first field is primary key
+                    const ::RemDbTypedValue* key_value = &row->values[0];
+                    const ::RemDbTypedValue* distance_value = &row->values[row->values_count - 1];
+                    
+                    std::string key_str;
+                    if (key_value->data_type == REMDB_TYPE_STRING) {
+                        key_str = std::string(reinterpret_cast<const char*>(key_value->value.string));
+                        key_str = key_str.substr(0, key_str.find('\0'));
+                    } else {
+                        key_str = std::to_string(key_value->value.u64);
+                    }
+                    
+                    double distance = 0.0;
+                    if (distance_value->data_type == REMDB_TYPE_FLOAT64) {
+                        distance = distance_value->value.float64;
+                    } else if (distance_value->data_type == REMDB_TYPE_FLOAT32) {
+                        distance = static_cast<double>(distance_value->value.float32);
+                    }
+                    
+                    results.emplace_back(key_str, distance);
+                }
+            }
+            
+            remdb_free_result_set(result_set);
+        }
+        
+        if (result_set) {
+            remdb_free_result_set(result_set);
+        }
+        
         return results;
     }
 };
@@ -111,22 +394,25 @@ public:
 class RemDbTransaction {
 private:
     bool active_;
+    RemDbHandle db_handle_;
 
 public:
-    RemDbTransaction() : active_(true) {}
+    RemDbTransaction(RemDbHandle db_handle) : active_(true), db_handle_(db_handle) {}
     
     bool commit() {
         if (active_) {
+            enum RemDbError err = remdb_commit_transaction(db_handle_);
             active_ = false;
-            return true;
+            return err == REMDB_SUCCESS;
         }
         return false;
     }
     
     bool rollback() {
         if (active_) {
+            enum RemDbError err = remdb_rollback_transaction(db_handle_);
             active_ = false;
-            return true;
+            return err == REMDB_SUCCESS;
         }
         return false;
     }
@@ -136,18 +422,84 @@ public:
     }
 };
 
-class RemDbResultSet {
+class RemDbPythonResultSet {
 private:
     std::vector<std::string> columns_;
     std::vector<std::vector<std::string>> rows_;
 
 public:
-    RemDbResultSet(const std::string& sql) {
-        columns_ = {"id", "name", "value"};
-        rows_ = {
-            {"1", "test1", "value1"},
-            {"2", "test2", "value2"}
-        };
+    RemDbPythonResultSet(RemDbHandle db_handle, const std::string& sql) {
+        ::RemDbResultSet* result_set = nullptr;
+        enum RemDbError err = remdb_sql_query(db_handle, sql.c_str(), &result_set);
+        
+        if (err == REMDB_SUCCESS && result_set) {
+            // Extract column names
+            for (size_t i = 0; i < result_set->columns_count; i++) {
+                if (result_set->columns[i]) {
+                    columns_.push_back(result_set->columns[i]);
+                } else {
+                    columns_.push_back("column_" + std::to_string(i));
+                }
+            }
+            
+            // Extract row data
+            for (size_t i = 0; i < result_set->rows_count; i++) {
+                const ::RemDbResultRow* row = &result_set->rows[i];
+                std::vector<std::string> row_data;
+                
+                for (size_t j = 0; j < row->values_count; j++) {
+                    const ::RemDbTypedValue* value = &row->values[j];
+                    std::string value_str;
+                    
+                    // Convert value based on data type
+                    switch (value->data_type) {
+                        case REMDB_TYPE_UINT8:
+                            value_str = std::to_string(value->value.u8);
+                            break;
+                        case REMDB_TYPE_UINT16:
+                            value_str = std::to_string(value->value.u16);
+                            break;
+                        case REMDB_TYPE_UINT32:
+                            value_str = std::to_string(value->value.u32);
+                            break;
+                        case REMDB_TYPE_UINT64:
+                            value_str = std::to_string(value->value.u64);
+                            break;
+                        case REMDB_TYPE_FLOAT32:
+                            value_str = std::to_string(value->value.float32);
+                            break;
+                        case REMDB_TYPE_FLOAT64:
+                            value_str = std::to_string(value->value.float64);
+                            break;
+                        case REMDB_TYPE_BOOL:
+                            value_str = value->value.boolean ? "true" : "false";
+                            break;
+                        case REMDB_TYPE_TIMESTAMP:
+                            value_str = std::to_string(value->value.timestamp);
+                            break;
+                        case REMDB_TYPE_STRING:
+                            value_str = std::string(reinterpret_cast<const char*>(value->value.string));
+                            // Remove trailing null character
+                            value_str = value_str.substr(0, value_str.find('\0'));
+                            break;
+                        default:
+                            value_str = "";
+                            break;
+                    }
+                    
+                    row_data.push_back(value_str);
+                }
+                
+                rows_.push_back(row_data);
+            }
+            
+            // Free result set
+            remdb_free_result_set(result_set);
+        } else {
+            // Query failed, return empty result
+            columns_ = std::vector<std::string>();
+            rows_ = std::vector<std::vector<std::string>>();
+        }
     }
     
     std::vector<std::string> get_columns() {
@@ -162,7 +514,7 @@ public:
         if (index >= 0 && index < static_cast<int>(rows_.size())) {
             return rows_[index];
         }
-        return {};
+        return std::vector<std::string>();
     }
 };
 
@@ -170,15 +522,51 @@ class RemDb {
 private:
     bool connected_;
     std::string db_path_;
-    std::map<std::string, std::shared_ptr<RemDbTable>> tables_;
+    RemDbHandle db_handle_;
 
 public:
-    RemDb() : connected_(false) {}
+    RemDb() : connected_(false), db_handle_(nullptr) {
+        // Initialize with null handle, connect() will initialize the database
+    }
+    
+    ~RemDb() {
+        // Implement destructor logic
+        if (connected_ && db_handle_) {
+            // Add code to free database resources here
+            // For example: remdb_close(db_handle_);
+            connected_ = false;
+            db_handle_ = nullptr;
+        }
+    }
     
     bool connect(const std::string& db_path) {
         db_path_ = db_path;
-        connected_ = true;
-        return true;
+        
+        // Try to initialize the database
+        enum RemDbError err = remdb_get_global(&db_handle_);
+        if (err == REMDB_SUCCESS) {
+            connected_ = true;
+        } else {
+            // If remdb_get_global fails, try remdb_init_global with minimal configuration
+            ::RemDbConfig config;
+            config.tables = nullptr;
+            config.tables_count = 0;
+            config.time_series_tables = nullptr;
+            config.time_series_tables_count = 0;
+            config.total_memory = 1024 * 1024 * 1024; // 1GB
+            config.low_power_mode_supported = 0;
+            config.low_power_max_records = -1;
+            
+            err = remdb_init_global((const ::RemDbConfig*)&config, &db_handle_);
+            if (err == REMDB_SUCCESS) {
+                connected_ = true;
+            } else {
+                // Print error for debugging
+                printf("Both remdb_get_global and remdb_init_global failed with error code: %d\n", err);
+            }
+        }
+        
+        return connected_;
     }
     
     bool is_connected() {
@@ -190,38 +578,52 @@ public:
             return nullptr;
         }
         
-        if (tables_.find(table_name) == tables_.end()) {
-            tables_[table_name] = std::make_shared<RemDbTable>(table_name);
+        size_t table_id = 0;
+        enum RemDbError err = remdb_table_get_by_name(db_handle_, table_name.c_str(), &table_id);
+        if (err == REMDB_SUCCESS) {
+            return std::make_shared<RemDbTable>(table_name, db_handle_, table_id);
         }
-        return tables_[table_name];
+        
+        return nullptr;
     }
     
     std::shared_ptr<RemDbTransaction> begin_transaction() {
         if (!connected_) {
             return nullptr;
         }
-        return std::make_shared<RemDbTransaction>();
+        
+        enum RemDbError err = remdb_begin_transaction(db_handle_, REMDB_TX_WRITE, REMDB_ISO_READ_COMMITTED);
+        if (err == REMDB_SUCCESS) {
+            return std::make_shared<RemDbTransaction>(db_handle_);
+        }
+        
+        return nullptr;
     }
     
-    std::shared_ptr<RemDbResultSet> execute_query(const std::string& sql) {
+    std::shared_ptr<RemDbPythonResultSet> execute_query(const std::string& sql) {
         if (!connected_) {
             return nullptr;
         }
-        return std::make_shared<RemDbResultSet>(sql);
+        
+        return std::make_shared<RemDbPythonResultSet>(db_handle_, sql);
     }
     
     bool save_snapshot(const std::string& path) {
         if (!connected_) {
             return false;
         }
-        return true;
+        
+        enum RemDbError err = remdb_save_snapshot(db_handle_, path.c_str());
+        return err == REMDB_SUCCESS;
     }
     
     bool restore_snapshot(const std::string& path) {
         if (!connected_) {
             return false;
         }
-        return true;
+        
+        enum RemDbError err = remdb_restore_snapshot(db_handle_, path.c_str());
+        return err == REMDB_SUCCESS;
     }
 };
 
@@ -233,7 +635,7 @@ PYBIND11_MODULE(_remdb, m) {
         .def("tobytes", &ZeroCopyData::tobytes);
     
     py::class_<RemDbTable, std::shared_ptr<RemDbTable>>(m, "RemDbTable")
-        .def(py::init<const std::string&>())
+        .def(py::init<const std::string&, RemDbHandle, size_t>())
         .def("insert", py::overload_cast<const std::map<std::string, std::string>&>(&RemDbTable::insert))
         .def("insert", py::overload_cast<const std::vector<std::string>&>(&RemDbTable::insert))
         .def("get", &RemDbTable::get)
@@ -246,16 +648,16 @@ PYBIND11_MODULE(_remdb, m) {
         .def("vector_search", &RemDbTable::vector_search);
     
     py::class_<RemDbTransaction, std::shared_ptr<RemDbTransaction>>(m, "RemDbTransaction")
-        .def(py::init<>())
+        .def(py::init<RemDbHandle>())
         .def("commit", &RemDbTransaction::commit)
         .def("rollback", &RemDbTransaction::rollback)
         .def("is_active", &RemDbTransaction::is_active);
     
-    py::class_<RemDbResultSet, std::shared_ptr<RemDbResultSet>>(m, "RemDbResultSet")
-        .def(py::init<const std::string&>())
-        .def("get_columns", &RemDbResultSet::get_columns)
-        .def("get_rows_count", &RemDbResultSet::get_rows_count)
-        .def("get_row", &RemDbResultSet::get_row);
+    py::class_<RemDbPythonResultSet, std::shared_ptr<RemDbPythonResultSet>>(m, "RemDbResultSet")
+        .def(py::init<RemDbHandle, const std::string&>())
+        .def("get_columns", &RemDbPythonResultSet::get_columns)
+        .def("get_rows_count", &RemDbPythonResultSet::get_rows_count)
+        .def("get_row", &RemDbPythonResultSet::get_row);
     
     py::class_<RemDb>(m, "RemDb")
         .def(py::init<>())

@@ -148,36 +148,13 @@ def insert_timeseries_data(table, data):
         
         elapsed = time.time() - start_time
         
-        # 通过 SQL 查询获取实际记录数
+        # 通过表的 get_record_count() 方法获取实际记录数
         actual_count = inserted
         try:
-            count_sql = "SELECT COUNT(*) FROM sensor_readings"
-            count_result = table.connection.execute_query(count_sql)
-            
-            if hasattr(count_result, 'get_rows_count'):
-                for row in count_result:
-                    if isinstance(row, dict):
-                        # 尝试不同的字段名
-                        if 'COUNT(*)' in row:
-                            actual_count = row['COUNT(*)']
-                        elif 'count' in row:
-                            actual_count = row['count']
-                        elif 'COUNT' in row:
-                            actual_count = row['COUNT']
-                        else:
-                            # 尝试获取第一个值
-                            actual_count = list(row.values())[0]
-                    else:
-                        actual_count = row[0]
-            
-            # 确保是数字
-            try:
-                actual_count = int(actual_count)
-            except Exception:
-                actual_count = inserted
-                
+            actual_count = table.get_record_count()
+            print(f"Actual record count via get_record_count(): {actual_count}")
         except Exception as e:
-            print(f"Error getting count via SQL: {e}")
+            print(f"Error getting count via get_record_count(): {e}")
         
         print(f"Inserted {actual_count} records in {elapsed:.2f} seconds")
         print(f"Insert rate: {actual_count/elapsed:.2f} records/second")
