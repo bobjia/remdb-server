@@ -1,0 +1,30 @@
+# Coverage configuration file for RemDB Python bindings
+
+[run]
+source = remdb
+source_pkgs = remdb
+omit =
+    */tests/*
+    */test*/*
+    */examples/*
+    */__pycache__/*
+    *.pyc
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if __name__ == "__main__":
+    raise NotImplementedError
+    # Skip lines with import errors
+    import _remdb
+
+show_missing = True
+sort = Cover
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml
