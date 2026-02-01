@@ -562,12 +562,18 @@ public class RemDbStatement implements Statement {
                 if (!rowsPart.isEmpty()) {
                     String[] rowStrings = rowsPart.split(";");
                     for (String rowString : rowStrings) {
-                        List<String> row = new ArrayList<>();
-                        String[] values = rowString.split(",");
-                        for (String value : values) {
-                            row.add(value);
+                        if (!rowString.isEmpty()) {
+                            List<String> row = new ArrayList<>();
+                            String[] values = rowString.split(",");
+                            // 确保只添加与列名数量匹配的行数据
+                            for (int i = 0; i < Math.min(values.length, columnNames.length); i++) {
+                                row.add(values[i]);
+                            }
+                            // 只有当行数据的列数与列名的数量匹配时，才添加到 rows 列表中
+                            if (row.size() == columnNames.length) {
+                                rows.add(row);
+                            }
                         }
-                        rows.add(row);
                     }
                 }
             }

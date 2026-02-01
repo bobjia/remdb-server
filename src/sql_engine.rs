@@ -184,6 +184,16 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         return execute_create_index(db, sql);
     }
 
+    // 处理ALTER TABLE命令
+    if sql_lower.starts_with("alter table ") {
+        return execute_alter_table(db, sql);
+    }
+
+    // 处理DROP TABLE命令
+    if sql_lower.starts_with("drop table ") {
+        return execute_drop_table(db, sql);
+    }
+
     // 处理STAT命令
     if sql_lower == "stat" {
         return execute_stat(db);
@@ -970,7 +980,10 @@ fn execute_insert(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
             && !sql_lower.contains("user_id")
             && !sql_lower.contains("group_id");
 
-    if !has_id_column {
+    // 检查表是否存在id列
+    let table_has_id_column = check_table_has_id_column(db, &table_name)?;
+
+    if !has_id_column && table_has_id_column {
         // 如果没有提供id，自动生成一个
         let sql_with_pk = generate_auto_inc_sql(sql)?;
         debug_println!("Debug: Generated INSERT with auto PK: {}", sql_with_pk);
@@ -1047,12 +1060,17 @@ fn execute_batch_insert(
     let values_list = extract_batch_values(sql)?;
 
     // 检查是否需要自动生成id
-    let needs_auto_id = !sql_lower.contains("(id")
-        && !sql_lower.contains(", id")
-        && !(sql_lower.contains("id,")
+    let has_id_column = sql_lower.contains("(id")
+        || sql_lower.contains(", id")
+        || sql_lower.contains("id,")
             && !sql_lower.contains("device_id")
             && !sql_lower.contains("user_id")
-            && !sql_lower.contains("group_id"));
+            && !sql_lower.contains("group_id");
+
+    // 检查表是否存在id列
+    let table_has_id_column = check_table_has_id_column(db, table_name)?;
+
+    let needs_auto_id = !has_id_column && table_has_id_column;
 
     if needs_auto_id {
         // 需要自动生成id，为每个值组生成完整的INSERT语句
@@ -1449,6 +1467,22 @@ fn generate_auto_inc_sql(sql: &str) -> std::result::Result<String, SqlError> {
     };
 
     Ok(new_sql)
+}
+
+/// 检查表是否存在id列
+fn check_table_has_id_column(db: &mut RemDb, table_name: &str) -> std::result::Result<bool, SqlError> {
+    // 执行DESCRIBE查询获取表结构
+    let sql = format!("DESCRIBE {}", table_name);
+    let result = db.sql_query(&sql)?;
+
+    // 检查结果列中是否有id列
+    for column_name in &result.columns {
+        if column_name == "id" {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// 查询当前表的最大主键值
@@ -2080,6 +2114,7 @@ fn execute_create_time_series_table(
                             else if data_type_str == "FLOAT64"
                                 || data_type_str == "FLOAT"
                                 || data_type_str == "DOUBLE"
+                                || data_type_str == "REAL"
                             {
                                 value_field = Some(field_name.to_string());
                             }
@@ -2114,6 +2149,7 @@ fn execute_create_time_series_table(
             else if data_type_str == "FLOAT64"
                 || data_type_str == "FLOAT"
                 || data_type_str == "DOUBLE"
+                || data_type_str == "REAL"
             {
                 value_field = Some(field_name.to_string());
             }
@@ -2828,4 +2864,40 @@ pub fn format_result_set(result_set: &ResultSet) -> String {
     output.push_str("\n");
 
     output
+}
+
+fn execute_alter_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 增加写操作计数
+    db.metrics.inc_write_ops();
+
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing ALTER TABLE SQL: {}", sql);
+
+    // 直接使用RemDb的sql_query方法执行ALTER TABLE语句
+    let result = db.sql_query(sql)?;
+
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: result.rows.len(),
+    })
+}
+
+fn execute_drop_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    // 增加写操作计数
+    db.metrics.inc_write_ops();
+
+    // 调试：打印要执行的SQL语句
+    debug_println!("Debug: Executing DROP TABLE SQL: {}", sql);
+
+    // 直接使用RemDb的sql_query方法执行DROP TABLE语句
+    let result = db.sql_query(sql)?;
+
+    // 构造结果集
+    Ok(ResultSet {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        affected_rows: result.rows.len(),
+    })
 }

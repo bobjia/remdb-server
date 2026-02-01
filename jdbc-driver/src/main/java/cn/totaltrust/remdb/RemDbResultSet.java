@@ -62,7 +62,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        return rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        return row.get(columnIndex - 1);
     }
 
     @Override
@@ -70,7 +74,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Boolean.parseBoolean(value) || value.equals("1");
     }
 
@@ -79,7 +87,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Byte.parseByte(value);
     }
 
@@ -88,7 +100,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Short.parseShort(value);
     }
 
@@ -97,7 +113,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Integer.parseInt(value);
     }
 
@@ -106,7 +126,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Long.parseLong(value);
     }
 
@@ -115,7 +139,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Float.parseFloat(value);
     }
 
@@ -124,7 +152,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Double.parseDouble(value);
     }
 
@@ -139,7 +171,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return value.getBytes();
     }
 
@@ -148,7 +184,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Date.valueOf(value);
     }
 
@@ -157,7 +197,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return Time.valueOf(value);
     }
 
@@ -166,7 +210,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         try {
             // 尝试从毫秒时间戳解析
             long timestamp = Long.parseLong(value);
@@ -319,7 +367,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        String value = row.get(columnIndex - 1);
         return new BigDecimal(value);
     }
 
@@ -587,7 +639,11 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        return rows.get(currentRowIndex).get(columnIndex - 1);
+        List<String> row = rows.get(currentRowIndex);
+        if (columnIndex - 1 >= row.size()) {
+            throw new SQLException("Insufficient columns in row data");
+        }
+        return row.get(columnIndex - 1);
     }
 
     @Override
@@ -1535,7 +1591,7 @@ public class RemDbResultSet implements ResultSet {
 
     private void checkRowIndex() throws SQLException {
         if (currentRowIndex < 0 || currentRowIndex >= rows.size()) {
-            throw new SQLException("Invalid row index");
+            throw new SQLException("Invalid row index: " + currentRowIndex + ", size: " + rows.size());
         }
     }
 
