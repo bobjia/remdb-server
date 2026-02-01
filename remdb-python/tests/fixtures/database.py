@@ -4,6 +4,8 @@ import unittest
 import tempfile
 import os
 import sys
+import gc
+import time
 from typing import Optional, Union
 
 # Try to import remdb, but allow tests to be skipped if not available
@@ -14,6 +16,14 @@ except ImportError:
     remdb = None
     REMDB_AVAILABLE = False
 
+# Try to import memory monitoring
+try:
+    import psutil
+    MEMORY_MONITORING = True
+except ImportError:
+    psutil = None
+    MEMORY_MONITORING = False
+
 class BaseTestCase(unittest.TestCase):
     """Base test case for RemDB tests with support for both local and network connections"""
     
@@ -23,6 +33,11 @@ class BaseTestCase(unittest.TestCase):
     NETWORK_PORT = 6666
     NETWORK_URL = f"jdbc://{NETWORK_HOST}:{NETWORK_PORT}"
     
+    # Memory management
+    ENABLE_MEMORY_MONITORING = True
+    FORCE_GC_AFTER_TEST = True
+    DELAY_AFTER_TEST = 0.1  # Small delay to allow resources to be released
+    
     def setUp(self):
         """Set up test environment"""
         super().setUp()
@@ -31,12 +46,23 @@ class BaseTestCase(unittest.TestCase):
         if not REMDB_AVAILABLE:
             self.skipTest("remdb module not available")
         
+        # Initialize resource tracking
+        self.created_tables = []
+        self.resources = {}
+        
+        # Monitor memory before test
+        if self.ENABLE_MEMORY_MONITORING and MEMORY_MONITORING:
+            memory = psutil.virtual_memory()
+            self._memory_before = memory.available
+            print(f"\n[{self.__class__.__name__}.{self._testMethodName}] Memory before: {memory.available / (1024**2):.2f} MB")
+        
         # Create temporary file for local database if not using network
         if not self.USE_NETWORK:
             self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.rdb')
             self.db_path = self.temp_file.name
             self.temp_file.close()
             self.connection_url = self.db_path
+            self.resources['temp_file'] = self.db_path
         else:
             self.db_path = None
             self.connection_url = self.NETWORK_URL
@@ -44,17 +70,72 @@ class BaseTestCase(unittest.TestCase):
         # Connect to database
         self.conn = remdb.connect(self.connection_url)
         self.conn.connect()
-        
+        self.resources['connection'] = self.conn
+    
     def tearDown(self):
-        """Clean up test environment"""
-        if self.conn:
-            self.conn.close()
-            
+        """Clean up test environment with enhanced resource management"""
+        # Drop all tables created in this test
+        if hasattr(self, 'created_tables'):
+            for table_name in reversed(self.created_tables):
+                try:
+                    self.drop_test_table(table_name)
+                except Exception as e:
+                    print(f"Warning: Failed to drop table {table_name}: {e}")
+        
+        # Close database connection
+        if hasattr(self, 'conn') and self.conn:
+            try:
+                self.conn.close()
+                self.conn = None
+            except Exception as e:
+                print(f"Warning: Failed to close connection: {e}")
+        
         # Clean up temporary file for local database
-        if not self.USE_NETWORK and self.db_path and os.path.exists(self.db_path):
-            os.unlink(self.db_path)
-            
+        if hasattr(self, 'db_path') and not self.USE_NETWORK and self.db_path and os.path.exists(self.db_path):
+            try:
+                os.unlink(self.db_path)
+            except Exception as e:
+                print(f"Warning: Failed to delete temporary file: {e}")
+        
+        # Clear resource tracking
+        if hasattr(self, 'resources'):
+            self.resources.clear()
+        
+        # Clear created tables list
+        if hasattr(self, 'created_tables'):
+            self.created_tables.clear()
+        
+        # Force garbage collection
+        if self.FORCE_GC_AFTER_TEST:
+            # First garbage collection
+            gc.collect()
+            # Small delay to allow resources to be released
+            if self.DELAY_AFTER_TEST:
+                time.sleep(self.DELAY_AFTER_TEST)
+            # Second garbage collection to catch any remaining cycles
+            gc.collect()
+        
+        # Monitor memory after test
+        if self.ENABLE_MEMORY_MONITORING and MEMORY_MONITORING and hasattr(self, '_memory_before'):
+            memory = psutil.virtual_memory()
+            memory_after = memory.available
+            memory_diff = (memory_after - self._memory_before) / (1024**2)
+            print(f"[{self.__class__.__name__}.{self._testMethodName}] Memory after: {memory_after / (1024**2):.2f} MB")
+            if memory_diff > 0:
+                print(f"[{self.__class__.__name__}.{self._testMethodName}] Memory freed: {memory_diff:.2f} MB")
+            else:
+                print(f"[{self.__class__.__name__}.{self._testMethodName}] Memory used: {abs(memory_diff):.2f} MB")
+        
         super().tearDown()
+        
+    def create_test_table(self, table_name: str, schema: str):
+        """Create a test table with the given schema"""
+        sql = f"CREATE TABLE {table_name} ({schema})"
+        self.execute_sql(sql)
+        self.assert_table_exists(table_name)
+        # Track created tables for cleanup
+        if hasattr(self, 'created_tables'):
+            self.created_tables.append(table_name)
     
     def execute_sql(self, sql: str, params: Optional[list] = None):
         """Execute SQL statement and return result set"""
@@ -101,12 +182,6 @@ class BaseTestCase(unittest.TestCase):
         for i, (actual_row, expected_row) in enumerate(zip(rows, expected_rows)):
             self.assertEqual(actual_row, expected_row,
                            f"Row {i} mismatch: expected {expected_row}, got {actual_row}")
-    
-    def create_test_table(self, table_name: str, schema: str):
-        """Create a test table with the given schema"""
-        sql = f"CREATE TABLE {table_name} ({schema})"
-        self.execute_sql(sql)
-        self.assert_table_exists(table_name)
     
     def drop_test_table(self, table_name: str):
         """Drop a test table if it exists"""
