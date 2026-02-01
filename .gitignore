@@ -11,3 +11,8 @@ remdb/*
 db/*
 slave-db/*
 .idea/*
+remdb-python/*/__pycache__/*
+remdb-python/__pycache__/*
+*.pyd
+*.pyc
+remdb-python/remdb_python.egg-info/*

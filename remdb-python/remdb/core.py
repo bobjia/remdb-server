@@ -40,7 +40,7 @@ class RemDbConnection:
         Initialize a database connection
 
         Args:
-            db_path: Path to the database file (e.g., "path/to/database.rdb") or JDBC URL (e.g., "jdbc://host:port")
+            db_path: Path to the database file (e.g., "path/to/database.rdb") or JDBC URL (e.g., "jdbc://host:port/database")
         """
         self.db_path = db_path
         self.connected = False
@@ -54,6 +54,7 @@ class RemDbConnection:
             parsed_url = parse_jdbc_url(db_path)
             self.host = parsed_url["host"]
             self.port = parsed_url["port"]
+            self.database = parsed_url["database"]
         else:
             # 本地文件连接
             self.is_network_connection = False
@@ -76,7 +77,7 @@ class RemDbConnection:
             if self.is_network_connection:
                 # 网络连接
                 try:
-                    self.jdbc_client = JdbcClient(self.host, self.port)
+                    self.jdbc_client = JdbcClient(self.host, self.port, database=self.database)
                     self.connected = self.jdbc_client.connect()
                     if not self.connected:
                         raise RemDbError(f"Failed to connect to database server: {self.host}:{self.port}")

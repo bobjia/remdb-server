@@ -515,7 +515,7 @@ def parse_jdbc_url(url: str) -> Dict[str, Any]:
     Parse JDBC URL
 
     Args:
-        url: JDBC URL in format jdbc://host:port
+        url: JDBC URL in format jdbc://host:port/database
 
     Returns:
         Dict[str, Any]: Parsed URL components
@@ -525,16 +525,18 @@ def parse_jdbc_url(url: str) -> Dict[str, Any]:
     """
     import re
 
-    pattern = r'^jdbc://([^:]+):(\d+)$'
+    pattern = r'^jdbc://([^:]+):(\d+)/([^/]+)$'
     match = re.match(pattern, url)
 
     if not match:
-        raise ValueError(f"Invalid JDBC URL format: {url}. Expected format: jdbc://host:port")
+        raise ValueError(f"Invalid JDBC URL format: {url}. Expected format: jdbc://host:port/database")
 
     host = match.group(1)
     port = int(match.group(2))
+    database = match.group(3)
 
     return {
         'host': host,
-        'port': port
+        'port': port,
+        'database': database
     }

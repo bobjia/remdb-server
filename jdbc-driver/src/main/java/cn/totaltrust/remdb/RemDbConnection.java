@@ -26,6 +26,10 @@ public class RemDbConnection implements Connection {
     private final ByteBuffer recvBuffer = ByteBuffer.allocateDirect(65536); // 64KB接收缓冲区
 
     public RemDbConnection(String host, int port, String user, String password) throws SQLException {
+        this(host, port, user, password, "default");
+    }
+    
+    public RemDbConnection(String host, int port, String user, String password, String database) throws SQLException {
         try {
             // 创建直接内存缓冲池（16个8KB缓冲区）
             this.bufferPool = new DirectBufferPool(16, 8192);
@@ -52,7 +56,7 @@ public class RemDbConnection implements Connection {
             this.channel.configureBlocking(true);
             
             // 使用Thread.interrupt()实现超时处理
-            initializeConnectionWithTimeout(user, password);
+            initializeConnectionWithTimeout(user, password, database);
         } catch (java.net.SocketTimeoutException e) {
             throw new SQLException("Failed to connect to RemDb server: Connection timed out. Please check if the server is running on port " + port + ".", e);
         } catch (InterruptedException e) {
@@ -64,9 +68,9 @@ public class RemDbConnection implements Connection {
     }
     
     // 初始化连接，发送连接请求
-    private void initializeConnection(String user, String password) throws SQLException, IOException {
+    private void initializeConnection(String user, String password, String database) throws SQLException, IOException {
         // 构建连接请求
-        Jdbc.JdbcRequest request = buildConnectionRequestMessage(user, password);
+        Jdbc.JdbcRequest request = buildConnectionRequestMessage(user, password, database);
         
         // 发送请求（包含4字节长度前缀）
         sendJdbcRequest(request);
@@ -79,14 +83,14 @@ public class RemDbConnection implements Connection {
     }
     
     // 使用单独的线程实现超时处理的初始化连接方法
-    private void initializeConnectionWithTimeout(String user, String password) throws SQLException, IOException, InterruptedException {
+    private void initializeConnectionWithTimeout(String user, String password, String database) throws SQLException, IOException, InterruptedException {
         // 创建一个线程来执行初始化连接
         final SQLException[] sqlException = {null};
         final IOException[] ioException = {null};
         
         Thread initThread = new Thread(() -> {
             try {
-                initializeConnection(user, password);
+                initializeConnection(user, password, database);
             } catch (SQLException e) {
                 sqlException[0] = e;
             } catch (IOException e) {
@@ -135,11 +139,11 @@ public class RemDbConnection implements Connection {
     }
     
     // 构建连接请求
-    private Jdbc.JdbcRequest buildConnectionRequestMessage(String user, String password) {
+    private Jdbc.JdbcRequest buildConnectionRequestMessage(String user, String password, String database) {
         Jdbc.ConnectionRequest connection = Jdbc.ConnectionRequest.newBuilder()
             .setUsername(user)
             .setPassword(password)
-            .setDatabase("default")
+            .setDatabase(database)
             .setFetchSize(100)
             .setAutoCommit(true)
             .build();

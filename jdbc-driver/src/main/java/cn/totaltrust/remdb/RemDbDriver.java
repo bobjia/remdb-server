@@ -19,20 +19,36 @@ public class RemDbDriver implements Driver {
             return null;
         }
 
-        // Parse URL: jdbc:remdb://host:port
+        // Parse URL: jdbc:remdb://host:port/database
         String host = "localhost";
         int port = 6666; // Default JDBC port
+        String database = "default"; // Default database name
 
         // Simple URL parsing without regex
         // "jdbc:remdb://" is 13 characters long
         String urlPart = url.substring(13);
         
-        // Get host and port
+        // Get host, port, and database
         int colonIndex = urlPart.indexOf(":");
         if (colonIndex != -1) {
             host = urlPart.substring(0, colonIndex);
-            String portStr = urlPart.substring(colonIndex + 1);
-            port = Integer.parseInt(portStr);
+            
+            // Get port and possibly database
+            String portAndDatabase = urlPart.substring(colonIndex + 1);
+            int slashIndex = portAndDatabase.indexOf("/");
+            
+            if (slashIndex != -1) {
+                // Extract port
+                String portStr = portAndDatabase.substring(0, slashIndex);
+                port = Integer.parseInt(portStr);
+                
+                // Extract database name
+                database = portAndDatabase.substring(slashIndex + 1);
+            } else {
+                // No database specified
+                String portStr = portAndDatabase;
+                port = Integer.parseInt(portStr);
+            }
         } else {
             host = urlPart;
         }
@@ -40,7 +56,7 @@ public class RemDbDriver implements Driver {
         String user = info.getProperty("user", "");
         String password = info.getProperty("password", "");
 
-        return new RemDbConnection(host, port, user, password);
+        return new RemDbConnection(host, port, user, password, database);
     }
 
     @Override
