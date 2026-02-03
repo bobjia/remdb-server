@@ -1727,6 +1727,7 @@ name = "remdb"
 version = "0.2.9"
 dependencies = [
  "cc",
+ "lazy_static",
  "rand",
  "remdb-macros",
  "socket2 0.5.10",

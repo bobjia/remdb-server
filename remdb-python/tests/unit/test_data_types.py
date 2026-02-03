@@ -534,5 +534,93 @@ class TestDataTypeEdgeCases(LocalTestCase):
         self.assertEqual(rows[1]["bool_val"], True)      # Default (not overridden)
 
 
+class TestDataTypeJSON(LocalTestCase):
+    """Test JSON data type"""
+    
+    def test_json_creation(self):
+        """Test creating table with JSON columns"""
+        table_name = "test_json_table"
+        schema = """
+            id INTEGER PRIMARY KEY,
+            data JSON,
+            config JSON,
+            metadata JSON
+        """
+        
+        self.create_test_table(table_name, schema)
+        
+        # Insert data with various JSON structures
+        test_data = [
+            {
+                "id": 1, 
+                "data": {"name": "Alice", "age": 30, "tags": ["user", "admin"]},
+                "config": {"theme": "dark", "notifications": True},
+                "metadata": {}
+            },
+            {
+                "id": 2, 
+                "data": [1, 2, 3, 4, 5],
+                "config": None,
+                "metadata": {"created_at": "2023-01-01"}
+            },
+            {
+                "id": 3, 
+                "data": "simple string",  # JSON can also store strings
+                "config": 42,  # JSON can store numbers
+                "metadata": True  # JSON can store booleans
+            },
+        ]
+        
+        for item in test_data:
+            self.insert_test_data(table_name, [item])
+        
+        self.assert_row_count(table_name, 3)
+        
+        # Query and verify
+        result = self.execute_sql(f"SELECT * FROM {table_name} ORDER BY id")
+        rows = list(result)
+        
+        self.assertEqual(len(rows), 3)
+        # Note: We'll test proper JSON deserialization in the Python API test
+    
+    def test_json_update(self):
+        """Test updating JSON columns"""
+        table_name = "test_json_update"
+        schema = "id INTEGER PRIMARY KEY, data JSON"
+        
+        self.create_test_table(table_name, schema)
+        
+        # Insert initial data
+        self.execute_sql('INSERT INTO test_json_update VALUES (1, "{\"status\": \"active\"}")')
+        
+        # Update JSON data
+        self.execute_sql('UPDATE test_json_update SET data = "{\"status\": \"inactive\", \"reason\": \"user request\"}" WHERE id = 1')
+        
+        # Verify update
+        result = self.execute_sql('SELECT data FROM test_json_update WHERE id = 1')
+        rows = list(result)
+        self.assertEqual(len(rows), 1)
+    
+    def test_json_querying(self):
+        """Test querying JSON columns"""
+        table_name = "test_json_query"
+        schema = "id INTEGER PRIMARY KEY, user JSON"
+        
+        self.create_test_table(table_name, schema)
+        
+        # Insert test data
+        users = [
+            {"id": 1, "user": {"name": "Alice", "age": 30}},
+            {"id": 2, "user": {"name": "Bob", "age": 25}},
+            {"id": 3, "user": {"name": "Charlie", "age": 35}},
+        ]
+        
+        for user in users:
+            self.insert_test_data(table_name, [user])
+        
+        # Test that table has all rows
+        self.assert_row_count(table_name, 3)
+
+
 if __name__ == '__main__':
     unittest.main()

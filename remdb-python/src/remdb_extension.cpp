@@ -112,40 +112,45 @@ public:
                 std::string value_str;
                 
                 // Convert value based on data type
-                switch (value->data_type) {
-                    case REMDB_TYPE_UINT8:
-                        value_str = std::to_string(value->value.u8);
-                        break;
-                    case REMDB_TYPE_UINT16:
-                        value_str = std::to_string(value->value.u16);
-                        break;
-                    case REMDB_TYPE_UINT32:
-                        value_str = std::to_string(value->value.u32);
-                        break;
-                    case REMDB_TYPE_UINT64:
-                        value_str = std::to_string(value->value.u64);
-                        break;
-                    case REMDB_TYPE_FLOAT32:
-                        value_str = std::to_string(value->value.float32);
-                        break;
-                    case REMDB_TYPE_FLOAT64:
-                        value_str = std::to_string(value->value.float64);
-                        break;
-                    case REMDB_TYPE_BOOL:
-                        value_str = value->value.boolean ? "true" : "false";
-                        break;
-                    case REMDB_TYPE_TIMESTAMP:
-                        value_str = std::to_string(value->value.timestamp);
-                        break;
-                    case REMDB_TYPE_STRING:
-                        value_str = std::string(reinterpret_cast<const char*>(value->value.string));
-                        // Remove trailing null character
-                        value_str = value_str.substr(0, value_str.find('\0'));
-                        break;
-                    default:
-                        value_str = "";
-                        break;
-                }
+                    switch (value->data_type) {
+                        case REMDB_TYPE_UINT8:
+                            value_str = std::to_string(value->value.u8);
+                            break;
+                        case REMDB_TYPE_UINT16:
+                            value_str = std::to_string(value->value.u16);
+                            break;
+                        case REMDB_TYPE_UINT32:
+                            value_str = std::to_string(value->value.u32);
+                            break;
+                        case REMDB_TYPE_UINT64:
+                            value_str = std::to_string(value->value.u64);
+                            break;
+                        case REMDB_TYPE_FLOAT32:
+                            value_str = std::to_string(value->value.float32);
+                            break;
+                        case REMDB_TYPE_FLOAT64:
+                            value_str = std::to_string(value->value.float64);
+                            break;
+                        case REMDB_TYPE_BOOL:
+                            value_str = value->value.boolean ? "true" : "false";
+                            break;
+                        case REMDB_TYPE_TIMESTAMP:
+                            value_str = std::to_string(value->value.timestamp);
+                            break;
+                        case REMDB_TYPE_STRING:
+                            value_str = std::string(reinterpret_cast<const char*>(value->value.string));
+                            // Remove trailing null character
+                            value_str = value_str.substr(0, value_str.find('\0'));
+                            break;
+                        case REMDB_TYPE_JSON:
+                            // For JSON type, we'll need to handle it specially
+                            // For now, return empty string as placeholder
+                            value_str = "{}";
+                            break;
+                        default:
+                            value_str = "";
+                            break;
+                    }
                 
                 record.push_back(value_str);
             }
@@ -178,40 +183,45 @@ public:
                 std::string value_str;
                 
                 // Convert value based on data type
-                switch (value->data_type) {
-                    case REMDB_TYPE_UINT8:
-                        value_str = std::to_string(value->value.u8);
-                        break;
-                    case REMDB_TYPE_UINT16:
-                        value_str = std::to_string(value->value.u16);
-                        break;
-                    case REMDB_TYPE_UINT32:
-                        value_str = std::to_string(value->value.u32);
-                        break;
-                    case REMDB_TYPE_UINT64:
-                        value_str = std::to_string(value->value.u64);
-                        break;
-                    case REMDB_TYPE_FLOAT32:
-                        value_str = std::to_string(value->value.float32);
-                        break;
-                    case REMDB_TYPE_FLOAT64:
-                        value_str = std::to_string(value->value.float64);
-                        break;
-                    case REMDB_TYPE_BOOL:
-                        value_str = value->value.boolean ? "true" : "false";
-                        break;
-                    case REMDB_TYPE_TIMESTAMP:
-                        value_str = std::to_string(value->value.timestamp);
-                        break;
-                    case REMDB_TYPE_STRING:
-                        value_str = std::string(reinterpret_cast<const char*>(value->value.string));
-                        // Remove trailing null character
-                        value_str = value_str.substr(0, value_str.find('\0'));
-                        break;
-                    default:
-                        value_str = "";
-                        break;
-                }
+                    switch (value->data_type) {
+                        case REMDB_TYPE_UINT8:
+                            value_str = std::to_string(value->value.u8);
+                            break;
+                        case REMDB_TYPE_UINT16:
+                            value_str = std::to_string(value->value.u16);
+                            break;
+                        case REMDB_TYPE_UINT32:
+                            value_str = std::to_string(value->value.u32);
+                            break;
+                        case REMDB_TYPE_UINT64:
+                            value_str = std::to_string(value->value.u64);
+                            break;
+                        case REMDB_TYPE_FLOAT32:
+                            value_str = std::to_string(value->value.float32);
+                            break;
+                        case REMDB_TYPE_FLOAT64:
+                            value_str = std::to_string(value->value.float64);
+                            break;
+                        case REMDB_TYPE_BOOL:
+                            value_str = value->value.boolean ? "true" : "false";
+                            break;
+                        case REMDB_TYPE_TIMESTAMP:
+                            value_str = std::to_string(value->value.timestamp);
+                            break;
+                        case REMDB_TYPE_STRING:
+                            value_str = std::string(reinterpret_cast<const char*>(value->value.string));
+                            // Remove trailing null character
+                            value_str = value_str.substr(0, value_str.find('\0'));
+                            break;
+                        case REMDB_TYPE_JSON:
+                            // For JSON type, we'll need to handle it specially
+                            // For now, return empty string as placeholder
+                            value_str = "{}";
+                            break;
+                        default:
+                            value_str = "";
+                            break;
+                    }
                 
                 if (j > 0) {
                     data += ",";
@@ -481,6 +491,11 @@ public:
                             value_str = std::string(reinterpret_cast<const char*>(value->value.string));
                             // Remove trailing null character
                             value_str = value_str.substr(0, value_str.find('\0'));
+                            break;
+                        case REMDB_TYPE_JSON:
+                            // For JSON type, we'll need to handle it specially
+                            // For now, return empty string as placeholder
+                            value_str = "{}";
                             break;
                         default:
                             value_str = "";

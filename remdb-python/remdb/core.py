@@ -295,16 +295,32 @@ class RemDbTable:
                 # 对于网络连接，保留原始类型
                 return self.table.insert(record)
             else:
-                # 对于本地连接，将字典中的所有值转换为字符串
-                str_record = {k: str(v) for k, v in record.items()}
+                # 对于本地连接，将字典中的值转换为适当的类型
+                str_record = {}
+                for k, v in record.items():
+                    if isinstance(v, (dict, list)):
+                        # 对于JSON类型，转换为JSON字符串
+                        import json
+                        str_record[k] = json.dumps(v)
+                    else:
+                        # 其他类型转换为字符串
+                        str_record[k] = str(v)
                 return self.table.insert(str_record)
         elif isinstance(record, list):
             if is_network_connection:
                 # 对于网络连接，保留原始类型
                 return self.table.insert(record)
             else:
-                # 对于本地连接，将列表中的所有值转换为字符串
-                str_record = [str(item) for item in record]
+                # 对于本地连接，将列表中的值转换为字符串
+                str_record = []
+                for item in record:
+                    if isinstance(item, (dict, list)):
+                        # 对于JSON类型，转换为JSON字符串
+                        import json
+                        str_record.append(json.dumps(item))
+                    else:
+                        # 其他类型转换为字符串
+                        str_record.append(str(item))
                 return self.table.insert(str_record)
         
         return False
@@ -338,7 +354,34 @@ class RemDbTable:
         # 解析record为字典
         # 注意：这里假设record的第一个元素是id，后续元素是其他字段值
         # 实际应用中需要根据表结构进行解析
-        return {"id": record[0]} if record else {}
+        result = {"id": record[0]} if record else {}
+        
+        # 尝试解析JSON值
+        for k, v in result.items():
+            if isinstance(v, str):
+                # 尝试将字符串解析为JSON
+                try:
+                    import json
+                    parsed_value = json.loads(v)
+                    result[k] = parsed_value
+                except (json.JSONDecodeError, ValueError):
+                    # 如果不是有效的JSON，保持原始字符串
+                    pass
+        
+        return result
+
+    def get_by_id(self, key: Any, zero_copy: bool = False) -> Optional[Union[Dict[str, Any], memoryview]]:
+        """
+        Get a record by ID
+
+        Args:
+            key: Primary key value
+            zero_copy: Whether to use zero-copy mode
+
+        Returns:
+            Dictionary of record values, memoryview (if zero_copy=True), or None if not found
+        """
+        return self.get(key, zero_copy)
 
     def update(self, key: Any, record: Union[Dict[str, Any], List[Any]]) -> bool:
         """
@@ -364,16 +407,32 @@ class RemDbTable:
                 # 对于网络连接，保留原始类型
                 return self.table.update(key, record)
             else:
-                # 对于本地连接，将字典中的所有值转换为字符串
-                str_record = {k: str(v) for k, v in record.items()}
+                # 对于本地连接，将字典中的值转换为适当的类型
+                str_record = {}
+                for k, v in record.items():
+                    if isinstance(v, (dict, list)):
+                        # 对于JSON类型，转换为JSON字符串
+                        import json
+                        str_record[k] = json.dumps(v)
+                    else:
+                        # 其他类型转换为字符串
+                        str_record[k] = str(v)
                 return self.table.update(str(key), str_record)
         elif isinstance(record, list):
             if is_network_connection:
                 # 对于网络连接，保留原始类型
                 return self.table.update(key, record)
             else:
-                # 对于本地连接，将列表中的所有值转换为字符串
-                str_record = [str(item) for item in record]
+                # 对于本地连接，将列表中的值转换为字符串
+                str_record = []
+                for item in record:
+                    if isinstance(item, (dict, list)):
+                        # 对于JSON类型，转换为JSON字符串
+                        import json
+                        str_record.append(json.dumps(item))
+                    else:
+                        # 其他类型转换为字符串
+                        str_record.append(str(item))
                 return self.table.update(str(key), str_record)
         
         return False
@@ -389,6 +448,66 @@ class RemDbTable:
             True if successful, False otherwise
         """
         return self.table.delete_record(str(key))
+
+    def batch_insert(self, records: List[Union[Dict[str, Any], List[Any]]]) -> bool:
+        """
+        Batch insert multiple records
+
+        Args:
+            records: List of dictionaries or lists of values
+
+        Returns:
+            True if all records were inserted successfully, False otherwise
+        """
+        if not records:
+            return True
+        
+        # 检查是否是网络连接
+        is_network_connection = hasattr(self.table, 'table_name')
+        
+        all_success = True
+        for record in records:
+            if not self.insert(record):
+                all_success = False
+        return all_success
+
+    def batch_update(self, updates: List[Tuple[Any, Union[Dict[str, Any], List[Any]]]]) -> bool:
+        """
+        Batch update multiple records
+
+        Args:
+            updates: List of tuples (key, record)
+
+        Returns:
+            True if all records were updated successfully, False otherwise
+        """
+        if not updates:
+            return True
+        
+        all_success = True
+        for key, record in updates:
+            if not self.update(key, record):
+                all_success = False
+        return all_success
+
+    def batch_delete(self, keys: List[Any]) -> bool:
+        """
+        Batch delete multiple records
+
+        Args:
+            keys: List of primary key values
+
+        Returns:
+            True if all records were deleted successfully, False otherwise
+        """
+        if not keys:
+            return True
+        
+        all_success = True
+        for key in keys:
+            if not self.delete(key):
+                all_success = False
+        return all_success
 
     def get_record_count(self) -> int:
         """
@@ -814,6 +933,19 @@ class NetworkTableAdapter:
         except Exception:
             return None
 
+    def get_by_id(self, key: Any, zero_copy: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Get a record by ID
+
+        Args:
+            key: Primary key value
+            zero_copy: Whether to use zero-copy mode
+
+        Returns:
+            Dictionary of record values or None if not found
+        """
+        return self.get(key, zero_copy)
+
     def update(self, key: Any, record: Union[Dict[str, Any], List[Any]]) -> bool:
         """
         Update a record by key
@@ -980,6 +1112,63 @@ class NetworkTableAdapter:
             True if successful, False otherwise
         """
         return self.delete_record(key)
+
+    def batch_insert(self, records: List[Union[Dict[str, Any], List[Any]]]) -> bool:
+        """
+        Batch insert multiple records
+
+        Args:
+            records: List of dictionaries or lists of values
+
+        Returns:
+            True if all records were inserted successfully, False otherwise
+        """
+        if not records:
+            return True
+        
+        all_success = True
+        for record in records:
+            if not self.insert(record):
+                all_success = False
+        return all_success
+
+    def batch_update(self, updates: List[Tuple[Any, Union[Dict[str, Any], List[Any]]]]) -> bool:
+        """
+        Batch update multiple records
+
+        Args:
+            updates: List of tuples (key, record)
+
+        Returns:
+            True if all records were updated successfully, False otherwise
+        """
+        if not updates:
+            return True
+        
+        all_success = True
+        for key, record in updates:
+            if not self.update(key, record):
+                all_success = False
+        return all_success
+
+    def batch_delete(self, keys: List[Any]) -> bool:
+        """
+        Batch delete multiple records
+
+        Args:
+            keys: List of primary key values
+
+        Returns:
+            True if all records were deleted successfully, False otherwise
+        """
+        if not keys:
+            return True
+        
+        all_success = True
+        for key in keys:
+            if not self.delete(key):
+                all_success = False
+        return all_success
 
     def get_record_count(self) -> int:
         """
@@ -1426,6 +1615,159 @@ class QueryBuilder:
         # 执行查询
         return connection.execute_query(sql)
 
+# 订阅发布相关类
+class RemDbPubSub:
+    """
+    RemDB Publish/Subscribe system
+    """
+
+    def __init__(self, config=None):
+        """
+        Initialize PubSub system
+
+        Args:
+            config: PubSub configuration dict
+        """
+        if config is None:
+            config = {}
+        
+        # 默认配置
+        self.config = {
+            "udp_mode": config.get("udp_mode", "unicast"),
+            "multicast_addr": config.get("multicast_addr", "239.0.0.1"),
+            "port": config.get("port", 5555),
+            "buffer_size": config.get("buffer_size", 8192),
+            "max_topics": config.get("max_topics", 100),
+            "max_subscribers_per_topic": config.get("max_subscribers_per_topic", 10),
+            "enable_nack": config.get("enable_nack", True),
+            "retransmit_timeout": config.get("retransmit_timeout", 1000),
+            "max_retransmits": config.get("max_retransmits", 3)
+        }
+        
+        # 初始化订阅者管理器
+        self.subscribers = {}
+        self.next_subscription_id = 1
+        
+        # 主题ID映射
+        self.topic_map = {}
+        self.next_topic_id = 1
+
+    def subscribe(self, topic, callback):
+        """
+        Subscribe to a topic
+
+        Args:
+            topic: Topic name or wildcard "*"
+            callback: Callback function to receive messages
+
+        Returns:
+            Subscription ID
+        """
+        # 获取或创建主题ID
+        if topic == "*":
+            topic_id = 0xFFFF  # 通配符主题ID
+        else:
+            if topic not in self.topic_map:
+                self.topic_map[topic] = self.next_topic_id
+                self.next_topic_id += 1
+            topic_id = self.topic_map[topic]
+        
+        # 生成订阅ID
+        subscription_id = self.next_subscription_id
+        self.next_subscription_id += 1
+        
+        # 存储订阅信息
+        self.subscribers[subscription_id] = {
+            "topic": topic,
+            "topic_id": topic_id,
+            "callback": callback
+        }
+        
+        return subscription_id
+
+    def unsubscribe(self, subscription_id):
+        """
+        Unsubscribe from a topic
+
+        Args:
+            subscription_id: Subscription ID
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if subscription_id in self.subscribers:
+            del self.subscribers[subscription_id]
+            return True
+        return False
+
+    def publish(self, topic, message):
+        """
+        Publish a message to a topic
+
+        Args:
+            topic: Topic name
+            message: Message to publish
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # 获取主题ID
+        if topic not in self.topic_map:
+            return False
+        
+        topic_id = self.topic_map[topic]
+        
+        # 分发消息给订阅者
+        self._dispatch_message(topic_id, message)
+        
+        return True
+
+    def _dispatch_message(self, topic_id, message):
+        """
+        Dispatch message to subscribers
+
+        Args:
+            topic_id: Topic ID
+            message: Message to dispatch
+        """
+        # 分发消息给具体主题的订阅者
+        for subscription_id, subscriber in self.subscribers.items():
+            if subscriber["topic_id"] == topic_id:
+                try:
+                    subscriber["callback"](topic_id, message)
+                except Exception:
+                    pass
+        
+        # 分发消息给通配符订阅者
+        for subscription_id, subscriber in self.subscribers.items():
+            if subscriber["topic_id"] == 0xFFFF:
+                try:
+                    subscriber["callback"](topic_id, message)
+                except Exception:
+                    pass
+
+    def start(self):
+        """
+        Start the PubSub system
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # 这里可以启动接收线程
+        # 由于Rust实现中使用轮询方式，Python端暂时只提供基本功能
+        return True
+
+    def stop(self):
+        """
+        Stop the PubSub system
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # 清理资源
+        self.subscribers.clear()
+        return True
+
 # 辅助函数
 def connect(db_path: str = "") -> RemDbConnection:
     """
@@ -1440,3 +1782,15 @@ def connect(db_path: str = "") -> RemDbConnection:
     conn = RemDbConnection(db_path)
     conn.connect()
     return conn
+
+def create_pubsub(config=None):
+    """
+    Create a PubSub instance
+
+    Args:
+        config: PubSub configuration dict
+
+    Returns:
+        RemDbPubSub instance
+    """
+    return RemDbPubSub(config)

@@ -282,5 +282,104 @@ class TestNetworkConnection(unittest.TestCase):
             # 预期可能会失败，因为服务器可能未运行
             pass
 
+class TestJSONDataType(unittest.TestCase):
+    """Test JSON data type support in Python API"""
+
+    def setUp(self):
+        """Set up test environment"""
+        # 创建临时文件作为数据库路径
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False)
+        self.db_path = self.temp_file.name
+        self.temp_file.close()
+
+    def tearDown(self):
+        """Clean up test environment"""
+        # 删除临时文件
+        if os.path.exists(self.db_path):
+            os.unlink(self.db_path)
+
+    def test_json_serialization_deserialization(self):
+        """Test JSON serialization and deserialization"""
+        with remdb.connect(self.db_path) as db:
+            # 创建表
+            db.execute_query("CREATE TABLE test_json (id INTEGER PRIMARY KEY, data JSON)")
+            
+            # 获取表实例
+            table = db.get_table("test_json")
+            
+            # 测试数据 - Python字典
+            test_data = {
+                "name": "Alice",
+                "age": 30,
+                "tags": ["user", "admin"],
+                "settings": {
+                    "theme": "dark",
+                    "notifications": True
+                }
+            }
+            
+            # 插入JSON数据（应该自动序列化为JSON字符串）
+            table.insert({"id": 1, "data": test_data})
+            
+            # 获取数据（应该自动反序列化为Python对象）
+            result = table.get(1)
+            self.assertIsInstance(result, dict)
+            
+            # 验证数据
+            retrieved_data = result.get("data", {})
+            self.assertIsInstance(retrieved_data, dict)
+            self.assertEqual(retrieved_data.get("name"), "Alice")
+            self.assertEqual(retrieved_data.get("age"), 30)
+            self.assertEqual(retrieved_data.get("tags"), ["user", "admin"])
+            self.assertEqual(retrieved_data.get("settings"), {"theme": "dark", "notifications": True})
+    
+    def test_json_list_serialization(self):
+        """Test JSON list serialization"""
+        with remdb.connect(self.db_path) as db:
+            # 创建表
+            db.execute_query("CREATE TABLE test_json_list (id INTEGER PRIMARY KEY, items JSON)")
+            
+            # 获取表实例
+            table = db.get_table("test_json_list")
+            
+            # 测试数据 - Python列表
+            test_list = [1, 2, 3, "four", 5.5, True, None]
+            
+            # 插入JSON数据
+            table.insert({"id": 1, "items": test_list})
+            
+            # 获取数据
+            result = table.get(1)
+            self.assertIsInstance(result, dict)
+            
+            # 验证数据
+            retrieved_items = result.get("items", [])
+            self.assertIsInstance(retrieved_items, list)
+            self.assertEqual(retrieved_items, test_list)
+    
+    def test_json_update(self):
+        """Test JSON update operations"""
+        with remdb.connect(self.db_path) as db:
+            # 创建表
+            db.execute_query("CREATE TABLE test_json_update (id INTEGER PRIMARY KEY, data JSON)")
+            
+            # 获取表实例
+            table = db.get_table("test_json_update")
+            
+            # 初始数据
+            initial_data = {"status": "active"}
+            table.insert({"id": 1, "data": initial_data})
+            
+            # 更新数据
+            updated_data = {"status": "inactive", "reason": "user request"}
+            table.update(1, {"data": updated_data})
+            
+            # 获取并验证更新后的数据
+            result = table.get(1)
+            retrieved_data = result.get("data", {})
+            self.assertEqual(retrieved_data.get("status"), "inactive")
+            self.assertEqual(retrieved_data.get("reason"), "user request")
+
+
 if __name__ == '__main__':
     unittest.main()
