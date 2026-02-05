@@ -481,17 +481,16 @@ fn execute_describe(db: &mut RemDb, table_name: &str) -> std::result::Result<Res
                                 remdb::types::DataType::Timestamp => {
                                     format!("{}", value.value.timestamp)
                                 }
-                                remdb::types::DataType::TimestampTZ => {
-                                    format!("{}", value.value.timestamp)
-                                }
-                                remdb::types::DataType::Interval => format!("{}", value.value.u64),
-                                remdb::types::DataType::String => {
+                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.time.value),
+                                remdb::types::DataType::Interval => format!("{}", value.value.interval.value),
+                                remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
                                     // 正确处理字符串类型，确保空值也能正确显示
                                     let string_slice = unsafe {
                                         core::str::from_utf8_unchecked(&value.value.string)
                                     };
                                     string_slice.trim_end_matches(char::from(0)).trim().to_string()
-                                }
+                                },
+                                remdb::types::DataType::Json => format!("{{...}}"),
                                 remdb::types::DataType::Vector => {
                                     // 向量类型转换为字符串表示
                                     format!("[VECTOR]")
@@ -812,15 +811,14 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 remdb::types::DataType::Timestamp => {
                                     format!("{}", value.value.timestamp)
                                 }
-                                remdb::types::DataType::TimestampTZ => {
-                                    format!("{}", value.value.timestamp)
-                                }
-                                remdb::types::DataType::Interval => format!("{}", value.value.u64),
-                                remdb::types::DataType::String => {
+                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.time.value),
+                                remdb::types::DataType::Interval => format!("{}", value.value.interval.value),
+                                remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
                                     let string_slice =
                                         core::str::from_utf8(&value.value.string).unwrap_or("");
                                     string_slice.trim_end_matches(char::from(0)).to_string()
-                                }
+                                },
+                                remdb::types::DataType::Json => format!("{{...}}",),
                                 remdb::types::DataType::Vector => {
                                     // 向量类型转换为字符串表示
                                     format!("[VECTOR]")
@@ -843,13 +841,14 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                         remdb::types::DataType::Float64 => format!("{}", value.value.float64),
                         remdb::types::DataType::Bool => format!("{}", value.value.bool),
                         remdb::types::DataType::Timestamp => format!("{}", value.value.timestamp),
-                        remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
-                        remdb::types::DataType::Interval => format!("{}", value.value.u64),
-                        remdb::types::DataType::String => {
+                        remdb::types::DataType::TimestampTZ => format!("{}", value.value.time.value),
+                        remdb::types::DataType::Interval => format!("{}", value.value.interval.value),
+                        remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
                             let string_slice =
                                 core::str::from_utf8(&value.value.string).unwrap_or("");
                             string_slice.trim_end_matches(char::from(0)).to_string()
-                        }
+                        },
+                        remdb::types::DataType::Json => format!("{{...}}",),
                         remdb::types::DataType::Vector => {
                             // 向量类型转换为字符串表示
                             // 提取表名
@@ -1722,9 +1721,14 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                 "DOUBLE" => remdb::types::DataType::Float64,
                                 "BOOLEAN" => remdb::types::DataType::Bool,
                                 "TIMESTAMP" => remdb::types::DataType::Timestamp,
-                                "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                                "STRING" | "VARCHAR" => remdb::types::DataType::VarChar,
+                                "CHAR" => remdb::types::DataType::Char,
+                                "TEXT" => remdb::types::DataType::Text,
                                 "VECTOR" => remdb::types::DataType::Vector,
-                                _ => remdb::types::DataType::String, // 默认使用String类型
+                                "TIMESTAMPTZ" => remdb::types::DataType::TimestampTZ,
+                                "INTERVAL" => remdb::types::DataType::Interval,
+                                "JSON" => remdb::types::DataType::Json,
+                                _ => remdb::types::DataType::VarChar, // 默认使用VarChar类型
                             };
 
                             // 处理默认值
@@ -1778,7 +1782,19 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                             bool: lower == "true" || lower == "1",
                                         })
                                     }
-                                    remdb::types::DataType::String => {
+                                    remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
+                                        // 移除引号
+                                        let str_val =
+                                            default_str.trim_matches(|c| c == '\'' || c == '"');
+                                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                                        let len = core::cmp::min(
+                                            str_val.len(),
+                                            remdb::types::MAX_STRING_LEN,
+                                        );
+                                        buf[..len].copy_from_slice(str_val.as_bytes());
+                                        Some(Value { string: buf })
+                                    }
+                                    remdb::types::DataType::Json => {
                                         // 移除引号
                                         let str_val =
                                             default_str.trim_matches(|c| c == '\'' || c == '"');
@@ -1888,9 +1904,14 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                 "DOUBLE" => remdb::types::DataType::Float64,
                 "BOOLEAN" => remdb::types::DataType::Bool,
                 "TIMESTAMP" => remdb::types::DataType::Timestamp,
-                "STRING" | "VARCHAR" => remdb::types::DataType::String,
+                "STRING" | "VARCHAR" => remdb::types::DataType::VarChar,
+                "CHAR" => remdb::types::DataType::Char,
+                "TEXT" => remdb::types::DataType::Text,
                 "VECTOR" => remdb::types::DataType::Vector,
-                _ => remdb::types::DataType::String, // 默认使用String类型
+                "TIMESTAMPTZ" => remdb::types::DataType::TimestampTZ,
+                "INTERVAL" => remdb::types::DataType::Interval,
+                "JSON" => remdb::types::DataType::Json,
+                _ => remdb::types::DataType::VarChar, // 默认使用VarChar类型
             };
 
             // 处理默认值
@@ -1942,13 +1963,44 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                             bool: lower == "true" || lower == "1",
                         })
                     }
-                    remdb::types::DataType::String => {
+                    remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
                         // 移除引号
                         let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
                         let mut buf = [0; remdb::types::MAX_STRING_LEN];
                         let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
                         buf[..len].copy_from_slice(str_val.as_bytes());
                         Some(Value { string: buf })
+                    }
+                    remdb::types::DataType::Json => {
+                        // 移除引号
+                        let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                        let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                        buf[..len].copy_from_slice(str_val.as_bytes());
+                        Some(Value { string: buf })
+                    }
+                    remdb::types::DataType::TimestampTZ => {
+                        // 处理带时区的时间戳默认值
+                        if default_str.eq_ignore_ascii_case("current_timestamp") {
+                            // 使用当前时间戳
+                            let now = remdb::types::time_utils::now_micros() as i64;
+                            Some(Value {
+                                time: remdb::types::db_timestamp::new(now, 0, 6, 0),
+                            })
+                        } else {
+                            // 尝试解析为数值时间戳
+                            let ts = default_str.parse().unwrap_or(0);
+                            Some(Value {
+                                time: remdb::types::db_timestamp::new(ts, 0, 6, 0),
+                            })
+                        }
+                    }
+                    remdb::types::DataType::Interval => {
+                        // 处理时间间隔默认值
+                        let val = default_str.parse().unwrap_or(0);
+                        Some(Value {
+                            interval: remdb::types::db_interval::new(val, 6, 0),
+                        })
                     }
                     remdb::types::DataType::Timestamp => {
                         // 处理时间戳默认值
@@ -2702,7 +2754,10 @@ fn execute_export_ddl(db: &RemDb, output_file: &str) -> std::result::Result<Resu
                 remdb::types::DataType::Timestamp => "TIMESTAMP".to_string(),
                 remdb::types::DataType::TimestampTZ => "TIMESTAMPTZ".to_string(),
                 remdb::types::DataType::Interval => "INTERVAL".to_string(),
-                remdb::types::DataType::String => format!("VARCHAR({})", field.size),
+                remdb::types::DataType::VarChar => format!("VARCHAR({})", field.size),
+                remdb::types::DataType::Char => format!("CHAR({})", field.size),
+                remdb::types::DataType::Text => "TEXT".to_string(),
+                remdb::types::DataType::Json => "JSON".to_string(),
                 remdb::types::DataType::Vector => "VECTOR".to_string(),
             };
 

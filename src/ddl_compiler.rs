@@ -323,7 +323,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
                     bool: lower == "true" || lower == "1",
                 })
             }
-            DataType::String => {
+            DataType::VarChar | DataType::Char | DataType::Text => {
                 // 移除引号
                 let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
                 let mut buf = [0; remdb::types::MAX_STRING_LEN];
@@ -357,6 +357,14 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
             DataType::Vector => {
                 // 向量类型暂不支持默认值
                 None
+            }
+            DataType::Json => {
+                // 移除引号
+                let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                buf[..len].copy_from_slice(str_val.as_bytes());
+                Some(Value { string: buf })
             }
         };
 
@@ -426,10 +434,10 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
                 let size = size_str.parse::<usize>().map_err(|_| {
                     DdlError::Parsing(format!("Invalid size for TEXT type: {}", typ))
                 })?;
-                return Ok((DataType::String, size));
+                return Ok((DataType::VarChar, size));
             }
         }
-        return Ok((DataType::String, 255)); // 默认大小为255字节
+        return Ok((DataType::VarChar, 255)); // 默认大小为255字节
     }
     if typ_lower.starts_with("varchar") {
         // 查找括号
@@ -451,7 +459,7 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
             .parse::<usize>()
             .map_err(|_| DdlError::Parsing(format!("Invalid size for VARCHAR type: {}", typ)))?;
 
-        return Ok((DataType::String, size));
+        return Ok((DataType::VarChar, size));
     }
 
     // 处理布尔类型
@@ -461,10 +469,10 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
 
     // 处理日期时间类型
     if typ_lower.starts_with("date") {
-        return Ok((DataType::String, 10)); // DATE格式：YYYY-MM-DD，固定10字节
+        return Ok((DataType::VarChar, 10)); // DATE格式：YYYY-MM-DD，固定10字节
     }
     if typ_lower.starts_with("datetime") {
-        return Ok((DataType::String, 19)); // DATETIME格式：YYYY-MM-DD HH:MM:SS，固定19字节
+        return Ok((DataType::VarChar, 19)); // DATETIME格式：YYYY-MM-DD HH:MM:SS，固定19字节
     }
     if typ_lower.starts_with("timestamp") {
         // 支持带时区的TIMESTAMP（TIMESTAMPTZ或TIMESTAMP WITH TIME ZONE）
@@ -523,6 +531,7 @@ fn create_table_def(
             name: col.name.to_string(),
             data_type: col.data_type,
             size: col.size,
+            string_length: None,
             offset,
             not_null: !col.nullable,
             primary_key: col.primary_key,
@@ -530,6 +539,7 @@ fn create_table_def(
             auto_increment: col.auto_increment,
             default_value: col.default_value.clone(),
             vector_metadata: None,
+            json_metadata: None,
         };
 
         field_defs.push(field_def);
