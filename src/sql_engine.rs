@@ -1,5 +1,5 @@
 use crate::ddl_compiler::DdlError;
-use remdb::{DdlExecutor, RemDb, RemDbError};
+use remdb::{DdlExecutor, RemDb, RemDbError, MAX_STRING_LEN, MAX_TEXT_LEN, json::JsonDocument};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -1644,6 +1644,7 @@ fn execute_update(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
 /// 执行CREATE TABLE命令
 fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, SqlError> {
+    println!("DEBUG execute_create_table called with sql: {}", sql);
     // 调试：打印要执行的SQL语句
     debug_println!("Debug: Executing CREATE TABLE SQL: {}", sql);
 
@@ -1798,13 +1799,15 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                         // 移除引号
                                         let str_val =
                                             default_str.trim_matches(|c| c == '\'' || c == '"');
-                                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
+                                        // JSON内联存储最大64字节
+                                        const INLINE_JSON_SIZE: usize = 64;
+                                        let mut buf = [0; INLINE_JSON_SIZE];
                                         let len = core::cmp::min(
                                             str_val.len(),
-                                            remdb::types::MAX_STRING_LEN,
+                                            INLINE_JSON_SIZE,
                                         );
                                         buf[..len].copy_from_slice(str_val.as_bytes());
-                                        Some(Value { string: buf })
+                                        Some(Value { json_storage: remdb::types::JsonStorage::Inline(buf) })
                                     }
                                     remdb::types::DataType::Timestamp => {
                                         // 处理时间戳默认值
@@ -1974,10 +1977,12 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                     remdb::types::DataType::Json => {
                         // 移除引号
                         let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
-                        let mut buf = [0; remdb::types::MAX_STRING_LEN];
-                        let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
+                        // JSON内联存储最大64字节
+                        const INLINE_JSON_SIZE: usize = 64;
+                        let mut buf = [0; INLINE_JSON_SIZE];
+                        let len = core::cmp::min(str_val.len(), INLINE_JSON_SIZE);
                         buf[..len].copy_from_slice(str_val.as_bytes());
-                        Some(Value { string: buf })
+                        Some(Value { json_storage: remdb::types::JsonStorage::Inline(buf) })
                     }
                     remdb::types::DataType::TimestampTZ => {
                         // 处理带时区的时间戳默认值
@@ -2075,6 +2080,11 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
             (*name, *data_type, *dimension as u16, None, default.clone())
         })
         .collect();
+
+    eprintln!("Debug converted_fields: count={}", converted_fields.len());
+    for (name, dt, dim, dist, def) in &converted_fields {
+        eprintln!("  field: name={}, type={:?}, dim={}, dist={:?}", name, dt, dim, dist);
+    }
 
     // 转换 primary_key_index 为 Option<Vec<usize>> 类型，以支持复合主键
     let primary_key_vec = primary_key_index.map(|index| vec![index]);

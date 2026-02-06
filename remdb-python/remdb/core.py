@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 import _remdb
 import contextlib
 import datetime
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 
 # 导入网络模块
 from .network import JdbcClient, parse_jdbc_url, JdbcClientError
@@ -30,6 +30,27 @@ class TransactionError(RemDbError):
 class ConfigError(RemDbError):
     """Configuration error"""
     pass
+
+# JSON值包装类
+class JsonValue:
+    """Wrapper class for JSON values to provide type hints for the C API"""
+    
+    def __init__(self, value):
+        """
+        Initialize a JSON value wrapper
+        
+        Args:
+            value: Python object to be serialized as JSON (dict, list, etc.)
+        """
+        self.value = value
+    
+    def __str__(self):
+        """Convert to JSON string"""
+        import json
+        return json.dumps(self.value)
+    
+    def __repr__(self):
+        return f"JsonValue({repr(self.value)})"
 
 # 数据库连接类
 class RemDbConnection:
@@ -298,7 +319,10 @@ class RemDbTable:
                 # 对于本地连接，将字典中的值转换为适当的类型
                 str_record = {}
                 for k, v in record.items():
-                    if isinstance(v, (dict, list)):
+                    if isinstance(v, JsonValue):
+                        # JsonValue实例，转换为带类型提示的JSON字符串
+                        str_record[k] = "__JSON__:" + str(v)
+                    elif isinstance(v, (dict, list)):
                         # 对于JSON类型，转换为JSON字符串
                         import json
                         str_record[k] = json.dumps(v)
@@ -314,7 +338,10 @@ class RemDbTable:
                 # 对于本地连接，将列表中的值转换为字符串
                 str_record = []
                 for item in record:
-                    if isinstance(item, (dict, list)):
+                    if isinstance(item, JsonValue):
+                        # JsonValue实例，转换为带类型提示的JSON字符串
+                        str_record.append("__JSON__:" + str(item))
+                    elif isinstance(item, (dict, list)):
                         # 对于JSON类型，转换为JSON字符串
                         import json
                         str_record.append(json.dumps(item))
@@ -817,7 +844,13 @@ class NetworkTableAdapter:
                 # 为不同类型的值添加适当的引号
                 def format_value(v):
                     if isinstance(v, str):
-                        return f"'{v}'"
+                        # 检查是否是JSON字符串（以{或[开头）
+                        if v.startswith('{') or v.startswith('['):
+                            # JSON字符串不需要引号
+                            return v
+                        else:
+                            # 普通字符串需要引号
+                            return f"'{v}'"
                     elif isinstance(v, bool):
                         return str(v).lower()
                     elif v is None:
@@ -866,7 +899,43 @@ class NetworkTableAdapter:
                     return True
             else:
                 # 对于列表类型，需要知道列名，这里简化处理
-                return False
+                # 将列表作为整体插入，不拆分为单独的值
+                # 构建INSERT语句，直接插入列表值
+                columns = list(record.keys())
+                values_str = str(record)  # 直接使用字符串表示
+                sql = f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({values_str})"
+                
+                # 执行查询，检查结果
+                result = self.connection.jdbc_client.execute_query(sql)
+                
+                # 检查执行结果
+                if "affected_rows" in result:
+                    # 这是UPDATE/DELETE/INSERT操作的结果
+                    affected = result.get("affected_rows", 0)
+                    return affected > 0
+                elif "last_insert_id" in result:
+                    # 有last_insert_id，说明插入成功
+                    return True
+                elif "rows" in result:
+                    # 检查是否是空的result_set（可能表示INSERT成功）
+                    rows = result.get("rows", [])
+                    # 如果是空列表，可能表示INSERT成功但没有返回数据
+                    if rows == []:
+                        # 对于INSERT，空的result_set可能表示成功
+                        return True
+                    # 否则是SELECT查询的结果
+                    # 对于INSERT，不应该返回非空行
+                    return False
+                else:
+                    # 没有返回结果，检查是否有其他指示成功的字段
+                    # 有时服务器可能返回空字典表示成功
+                    if result == {}:
+                        return True
+                    # 或者检查是否有错误信息
+                    if "error_message" in result:
+                        return False
+                    # 默认假设成功
+                    return True
         except Exception:
             return False
 
@@ -1431,6 +1500,8 @@ class RemDbResultSet:
         self.columns = self.result_set.get_columns()
         self.rows_count = self.result_set.get_rows_count()
         self.current_row = 0
+        
+        print(f"DEBUG Python RemDbResultSet.__init__: columns={self.columns}, rows_count={self.rows_count}")
 
     def __iter__(self):
         """Iterate over rows"""
@@ -1474,7 +1545,7 @@ class RemDbResultSet:
             Dictionary of row values
         """
         values = self.result_set.get_row(row_index)
-        return dict(zip(self.columns, values))
+        return values
 
     def to_dataframe(self):
         """

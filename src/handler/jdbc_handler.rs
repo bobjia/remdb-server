@@ -1,4 +1,3 @@
-use crate::network::ZeroCopyTransport;
 use crate::proto::*;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
 use bytes::Bytes;
@@ -13,7 +12,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 /// JDBC协议处理器
@@ -109,37 +108,18 @@ impl WorkerThread {
         let username_clone = username.clone();
         let password_hash_clone = password_hash.clone();
 
-        let id_clone = id;
         let handle = std::thread::spawn(move || {
             while !flag_clone.load(Ordering::SeqCst) {
                 // 从无锁队列获取请求
                 if let Some((request, response_tx)) = queue_clone.pop() {
-                    // 处理请求 - 安全地获取锁
-                    let response = match db_clone.lock() {
-                        Ok(mut db_guard) => {
-                            JdbcProtocolHandler::process_single_request(
-                                &mut *db_guard,
-                                request,
-                                auth_enabled_clone,
-                                &username_clone,
-                                &password_hash_clone,
-                            )
-                        }
-                        Err(_poisoned) => {
-                            error!("Mutex poisoned in worker thread {}, shutting down thread", id_clone);
-                            // 创建错误响应
-                            let error_response = JdbcResponse {
-                                request_id: request.request_id,
-                                status: Status::Error.into(),
-                                error_message: "Database lock poisoned".to_string(),
-                                response: None,
-                            };
-                            // 发送错误响应
-                            let _ = response_tx.send(error_response);
-                            break; // 退出线程循环
-                        }
-                    };
-                    
+                    // 处理请求
+                    let response = JdbcProtocolHandler::process_single_request(
+                        &mut *db_clone.lock().unwrap(),
+                        request,
+                        auth_enabled_clone,
+                        &username_clone,
+                        &password_hash_clone,
+                    );
                     // 发送响应
                     if response_tx.send(response).is_err() {
                         warn!("Failed to send response: channel closed");
@@ -205,176 +185,99 @@ impl JdbcProtocolHandler {
         let conn_id = self.metrics.new_connection();
         info!("New JDBC connection established: {}", conn_id);
 
+        // 设置TCP选项
+        if let Err(e) = socket.set_nodelay(true) {
+            error!("Failed to set TCP options: {:?}", e);
+        }
+
+        let (mut reader, mut writer) = socket.into_split();
+
         // 创建响应通道
         let (response_tx, response_rx) = mpsc::unbounded_channel::<JdbcResponse>();
 
-        // 检查是否启用了zerocopy特性
-        #[cfg(feature = "zerocopy")]
-        {
-            info!("Using zero-copy transport for JDBC connection: {}", conn_id);
-            // 使用零拷贝传输
-            let mut transport = ZeroCopyTransport::new(socket);
-            
-            // 设置TCP选项
-            if let Err(e) = transport.set_tcp_options() {
-                error!("Failed to set TCP options for zero-copy transport: {:?}", e);
-            }
-
-            // 使用Arc<tokio::sync::Mutex>来共享ZeroCopyTransport
-            let shared_transport = Arc::new(Mutex::new(transport));
-            let shared_transport_writer = shared_transport.clone();
-            
-            // 启动零拷贝响应发送任务
-            let (tx_clone, rx_clone) = (response_tx.clone(), response_rx);
-            tokio::spawn(async move {
-                let mut rx = rx_clone;
-                while let Some(response) = rx.recv().await {
-                    let mut buf = Vec::new();
-                    if let Err(e) = response.encode(&mut buf) {
-                        error!("Failed to encode response: {:?}", e);
-                        break;
-                    }
-
-                    let len = buf.len() as u32;
-                    let mut full_buf = Vec::with_capacity(4 + buf.len());
-                    full_buf.extend_from_slice(&len.to_be_bytes());
-                    full_buf.extend_from_slice(&buf);
-
-                    let mut transport = shared_transport_writer.lock().await;
-                    if let Err(e) = transport.send_zero_copy(Bytes::from(full_buf)).await {
-                        error!("Failed to send zero-copy response: {:?}", e);
-                        break;
-                    }
-                }
-            });
-
-            // 主循环：零拷贝读取请求
-            loop {
-                // 读取4字节的请求长度（大端）
-                let len_data = {
-                    let mut transport = shared_transport.lock().await;
-                    transport.read_zero_copy().await?
-                };
-                if len_data.len() != 4 {
+        // 启动响应发送任务（独占writer，避免读写互斥）
+        tokio::spawn(async move {
+            let mut rx = response_rx;
+            while let Some(response) = rx.recv().await {
+                let mut buf = Vec::new();
+                if let Err(e) = response.encode(&mut buf) {
+                    error!("Failed to encode response: {:?}", e);
                     break;
                 }
 
-                let len_buf: [u8; 4] = len_data.as_ref().try_into()?;
-                let len = u32::from_be_bytes(len_buf) as usize;
+                let len = buf.len() as u32;
+                let mut full_buf = Vec::with_capacity(4 + buf.len());
+                full_buf.extend_from_slice(&len.to_be_bytes());
+                full_buf.extend_from_slice(&buf);
 
-                // 读取完整的请求数据
-                let data_buf = {
-                    let mut transport = shared_transport.lock().await;
-                    transport.read_zero_copy().await?
-                };
-                if data_buf.len() != len {
+                if let Err(e) = writer.write_all(&full_buf).await {
+                    error!("Failed to send response: {:?}", e);
                     break;
                 }
-
-                // 解析JDBC请求
-                if let Ok(request) = JdbcRequest::decode(data_buf.as_ref()) {
-                    self.request_queue.push((request, tx_clone.clone()));
-                    self.metrics.record_request();
-                } else {
-                    error!("Failed to decode JDBC request");
+                if let Err(e) = writer.flush().await {
+                    error!("Failed to flush response: {:?}", e);
+                    break;
                 }
             }
-        }
+        });
 
-        // 默认使用普通TCP流
-        #[cfg(not(feature = "zerocopy"))]
-        {
-            // 设置TCP选项
-            if let Err(e) = socket.set_nodelay(true) {
-                error!("Failed to set TCP options: {:?}", e);
+        // 主循环处理请求
+        loop {
+            // 读取4字节的请求长度（大端）
+            let mut len_buf = [0u8; 4];
+            let mut bytes_read = 0;
+
+            while bytes_read < 4 {
+                let result = reader.read(&mut len_buf[bytes_read..]).await;
+                match result {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        bytes_read += n;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Connection {} error reading request length: {:?}",
+                            conn_id, e
+                        );
+                        break;
+                    }
+                }
             }
 
-            let (mut reader, mut writer) = socket.into_split();
+            if bytes_read != 4 {
+                break;
+            }
 
-            // 启动响应发送任务（独占writer，避免读写互斥）
-            tokio::spawn(async move {
-                let mut rx = response_rx;
-                while let Some(response) = rx.recv().await {
-                    let mut buf = Vec::new();
-                    if let Err(e) = response.encode(&mut buf) {
-                        error!("Failed to encode response: {:?}", e);
-                        break;
+            let len = u32::from_be_bytes(len_buf) as usize;
+
+            // 然后读取完整的请求数据
+            let mut data_buf = vec![0u8; len];
+            let mut bytes_read = 0;
+
+            while bytes_read < len {
+                let result = reader.read(&mut data_buf[bytes_read..]).await;
+                match result {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        bytes_read += n;
                     }
-
-                    let len = buf.len() as u32;
-                    let mut full_buf = Vec::with_capacity(4 + buf.len());
-                    full_buf.extend_from_slice(&len.to_be_bytes());
-                    full_buf.extend_from_slice(&buf);
-
-                    if let Err(e) = writer.write_all(&full_buf).await {
-                        error!("Failed to send response: {:?}", e);
-                        break;
-                    }
-                    if let Err(e) = writer.flush().await {
-                        error!("Failed to flush response: {:?}", e);
+                    Err(e) => {
+                        error!("Connection {} error reading request data: {:?}", conn_id, e);
                         break;
                     }
                 }
-            });
+            }
 
-            // 主循环处理请求
-            loop {
-                // 读取4字节的请求长度（大端）
-                let mut len_buf = [0u8; 4];
-                let mut bytes_read = 0;
+            if bytes_read != len {
+                break;
+            }
 
-                while bytes_read < 4 {
-                    let result = reader.read(&mut len_buf[bytes_read..]).await;
-                    match result {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            bytes_read += n;
-                        }
-                        Err(e) => {
-                            error!(
-                                "Connection {} error reading request length: {:?}",
-                                conn_id, e
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                if bytes_read != 4 {
-                    break;
-                }
-
-                let len = u32::from_be_bytes(len_buf) as usize;
-
-                // 然后读取完整的请求数据
-                let mut data_buf = vec![0u8; len];
-                let mut bytes_read = 0;
-
-                while bytes_read < len {
-                    let result = reader.read(&mut data_buf[bytes_read..]).await;
-                    match result {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            bytes_read += n;
-                        }
-                        Err(e) => {
-                            error!("Connection {} error reading request data: {:?}", conn_id, e);
-                            break;
-                        }
-                    }
-                }
-
-                if bytes_read != len {
-                    break;
-                }
-
-                // 解析JDBC请求
-                if let Ok(request) = JdbcRequest::decode(&data_buf[..]) {
-                    self.request_queue.push((request, response_tx.clone()));
-                    self.metrics.record_request();
-                } else {
-                    error!("Failed to decode JDBC request");
-                }
+            // 解析JDBC请求
+            if let Ok(request) = JdbcRequest::decode(&data_buf[..]) {
+                self.request_queue.push((request, response_tx.clone()));
+                self.metrics.record_request();
+            } else {
+                error!("Failed to decode JDBC request");
             }
         }
 
@@ -525,13 +428,6 @@ impl JdbcProtocolHandler {
             }
             Some(jdbc_request::Request::Connection(conn_req)) => {
                 // 处理连接请求
-                // 验证数据库名称是否为空
-                if conn_req.database.is_empty() {
-                    response.status = Status::Error.into();
-                    response.error_message = "Database name is required".to_string();
-                    return response;
-                }
-                
                 if auth_enabled {
                     // 验证用户名和密码
                     let provided_username = conn_req.username;
