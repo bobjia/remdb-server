@@ -8,6 +8,7 @@ set AUTH_ENABLED=false
 set USERNAME=
 set PASSWORD_HASH=
 set LOG_LEVEL=info
+set DEBUG_MODE=false
 
 REM Show Help
 if "%1"=="--help" goto :help
@@ -79,6 +80,20 @@ if "%1"=="-l" (
     goto :parse
 )
 
+if "%1"=="--debug" (
+    set DEBUG_MODE=true
+    set LOG_LEVEL=debug
+    shift
+    goto :parse
+)
+
+if "%1"=="-d" (
+    set DEBUG_MODE=true
+    set LOG_LEVEL=debug
+    shift
+    goto :parse
+)
+
 :end_parse
 
 REM Build Project
@@ -96,10 +111,18 @@ set RUST_BACKTRACE=1
 REM Start Server
 if "%AUTH_ENABLED%"=="true" (
     echo Starting JDBC Server with Authentication...
-    target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS% --jdbc-auth-enabled true --jdbc-username "%USERNAME%" --jdbc-password-hash "%PASSWORD_HASH%"
+    if "%DEBUG_MODE%"=="true" (
+        target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS% --jdbc-auth-enabled true --jdbc-username "%USERNAME%" --jdbc-password-hash "%PASSWORD_HASH%" --debug
+    ) else (
+        target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS% --jdbc-auth-enabled true --jdbc-username "%USERNAME%" --jdbc-password-hash "%PASSWORD_HASH%"
+    )
 ) else (
     echo Starting JDBC Server...
-    target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS%
+    if "%DEBUG_MODE%"=="true" (
+        target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS% --debug
+    ) else (
+        target\release\remdb-server.exe --jdbc-enabled true --jdbc-port %JDBC_PORT% --max-connections %MAX_CONNECTIONS%
+    )
 )
 
 goto :end
@@ -114,6 +137,8 @@ echo   --auth-enabled        Enable authentication
 echo   --username NAME       Authentication username
 echo   --password-hash HASH  Authentication password hash (SHA-256)
 echo   --log-level LEVEL     Log level (default: info)
+echo   --debug               Enable debug mode (equivalent to --log-level debug)
+echo   -d                    Short form of --debug
 echo   -h, --help            Show this help message
 echo.
 echo Examples:

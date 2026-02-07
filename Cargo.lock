@@ -1759,6 +1759,7 @@ dependencies = [
  "cc",
  "lazy_static",
  "rand",
+ "regex",
  "remdb-macros",
  "socket2 0.5.10",
  "tracing",

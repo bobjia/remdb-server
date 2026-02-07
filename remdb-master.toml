@@ -27,7 +27,7 @@ default_max_records = 10000
 # WAL配置
 [wal]
 # 日志文件路径
-log_path = "./db/wal"
+log_path = "./logs/remdb-server.log"
 # 日志模式，可选值：async, sync
 log_mode = "async"
 # 检查点间隔（毫秒），默认30000

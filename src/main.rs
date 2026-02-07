@@ -778,14 +778,24 @@ async fn main() {
     }
 
     // 初始化日志文件
-    let log_file_path = log_path.clone().unwrap_or("./logs".to_string());
-    std::fs::create_dir_all(&log_file_path).ok();
-    let now = SystemTime::now();
-    let timestamp = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let log_file_name = format!("{}/remdb-server-{}.log", log_file_path, timestamp);
+    let log_file_name = if let Some(log_path_val) = log_path.as_ref() {
+        // 用户指定了完整的日志文件路径
+        let log_file = std::path::Path::new(log_path_val);
+        if let Some(parent) = log_file.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        log_path_val.clone()
+    } else {
+        // 使用默认的日志目录和带有时间戳的文件名
+        let log_file_path = "./logs";
+        std::fs::create_dir_all(log_file_path).ok();
+        let now = SystemTime::now();
+        let timestamp = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{}/remdb-server-{}.log", log_file_path, timestamp)
+    };
     
     match remdb::init_logger_with_file(&log_file_name, debug_mode) {
         Ok(_) => {
@@ -856,6 +866,20 @@ async fn main() {
         .and_then(|id| id.parse::<u32>().ok())
         .unwrap_or(1); // 默认节点ID为1
 
+    // 修复 WAL 配置的 log_path 设置
+    let wal_log_path = if let Some(log_path_val) = log_path.as_ref() {
+        // 如果用户指定了日志文件路径，使用其目录作为 WAL 路径
+        let log_file = std::path::Path::new(log_path_val);
+        if let Some(parent) = log_file.parent() {
+            parent.to_str().unwrap_or("./wal")
+        } else {
+            "./wal"
+        }
+    } else {
+        // 使用默认的 WAL 路径
+        "./wal"
+    };
+
     // 创建配置
     let config = Box::leak(Box::new(remdb::config::DbConfig {
         tables: static_tables,
@@ -868,8 +892,7 @@ async fn main() {
                 as &'static dyn remdb::config::MemoryAllocator
         },
         wal_config: remdb::config::WALConfig {
-            log_path: Box::leak(log_path.unwrap_or("./wal".to_string()).into_boxed_str())
-                as &'static str,
+            log_path: Box::leak(wal_log_path.to_string().into_boxed_str()) as &'static str,
             log_mode: match wal_log_mode.as_deref() {
                 Some("sync") | Some("Sync") => remdb::config::LogMode::Sync,
                 _ => remdb::config::LogMode::Async,
@@ -1130,9 +1153,10 @@ async fn main() {
                     match unsafe { log_manager.check_flush_and_checkpoint() } {
                         Ok(()) => {
                             let duration = start.elapsed();
+                            let duration_ms = duration.as_secs_f64() * 1000.0;
                             info!(
-                                "[Checkpoint Timer] Checkpoint executed successfully in {:?}",
-                                duration
+                                "[Checkpoint Timer] Checkpoint executed successfully in {:.2} ms",
+                                duration_ms
                             );
                         }
                         Err(e) => {
@@ -1201,9 +1225,10 @@ async fn main() {
                             match result {
                                 Ok(()) => {
                                     let duration = start.elapsed();
+                                    let duration_ms = duration.as_secs_f64() * 1000.0;
                                     info!(
-                                        "[Snapshot Timer] {} snapshot executed successfully in {:?}",
-                                        snap_type, duration
+                                        "[Snapshot Timer] {} snapshot executed successfully in {:.2} ms",
+                                        snap_type, duration_ms
                                     );
                                 }
                                 Err(e) => {
