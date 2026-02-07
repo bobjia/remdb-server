@@ -589,7 +589,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                     value.value.float64,
                     core::str::from_utf8(&value.value.string).unwrap_or("")
                 );
-
+                
                 // 对于聚合函数结果，我们需要特殊处理
                 // 检查当前SQL是否包含聚合函数
                 let sql_lower = sql.to_lowercase();
@@ -811,7 +811,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                 remdb::types::DataType::Timestamp => {
                                     format!("{}", value.value.timestamp)
                                 }
-                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.time.value),
+                                remdb::types::DataType::TimestampTZ => format!("{}", value.value.timestamp),
                                 remdb::types::DataType::Interval => format!("{}", value.value.interval.value),
                                 remdb::types::DataType::VarChar | remdb::types::DataType::Char | remdb::types::DataType::Text => {
                                     let string_slice =

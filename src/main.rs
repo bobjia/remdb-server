@@ -996,6 +996,9 @@ async fn main() {
 
     log_println!("Database initialized with {} tables", config.tables.len());
 
+    // 标记是否从快照或WAL恢复了数据
+    let mut data_restored = false;
+
     // 加载全量镜像文件（优先级最高）
     if let Some(full_image_path) = &full_image {
         log_println!("Loading full image file: {}", full_image_path);
@@ -1003,6 +1006,7 @@ async fn main() {
             log_eprintln!("Error: Failed to load full image: {:?}", err);
         } else {
             log_println!("Full image loaded successfully");
+            data_restored = true;
         }
     } else {
         // 从WAL目录恢复数据（如果配置了WAL）
@@ -1015,15 +1019,16 @@ async fn main() {
                 // 如果WAL恢复失败，尝试从快照目录加载
                 if let Some(snapshot_dir) = &snapshot_dir {
                     log_println!("Falling back to snapshot directory: {}", snapshot_dir);
-                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir)
-                    {
+                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
                         log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
                     } else {
                         log_println!("Snapshot loaded successfully");
+                        data_restored = true;
                     }
                 }
             } else {
                 log_println!("Data recovered successfully from WAL");
+                data_restored = true;
             }
         } else if let Some(snapshot_dir) = &snapshot_dir {
             // 如果没有WAL目录，尝试从快照目录加载
@@ -1032,12 +1037,13 @@ async fn main() {
                 log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
             } else {
                 log_println!("Snapshot loaded successfully");
+                data_restored = true;
             }
         }
     }
 
-    // 执行DDL文件中的INSERT语句
-    if !insert_statements.is_empty() {
+    // 执行DDL文件中的INSERT语句（仅当没有从快照或WAL恢复数据时）
+    if !insert_statements.is_empty() && !data_restored {
         log_println!(
             "Executing {} INSERT statements from DDL file",
             insert_statements.len()
@@ -1057,6 +1063,8 @@ async fn main() {
                 }
             }
         }
+    } else if !insert_statements.is_empty() && data_restored {
+        log_println!("Skipping INSERT statements from DDL file (data already restored from snapshot/WAL)");
     }
 
     // 测试healthcheck命令

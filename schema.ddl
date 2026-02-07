@@ -2,7 +2,7 @@
 
 -- 创建用户表
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
     name varchar(16) UNIQUE NOT NULL,
     email TEXT NOT NULL,
     age INT default 20,
@@ -41,21 +41,21 @@ CREATE INDEX idx_orders_user_id ON orders (user_id);
 -- CREATE INDEX idx_orders_product_id ON orders (product_id);
 
 
-insert into users (name, email, age, created_at) values ("bob1", "a", 1,111111);
-insert into users (name, email, age, created_at) values ("bob2", "a", 2,111112);
-insert into users (name, email, age, created_at) values ("bob3", "a", 3,111113);
+insert into users (name, email, age, created_at) values ("bob1", "a9", 1,111111);
+insert into users (name, email, age, created_at) values ("bob2", "a8", 2,111112);
+insert into users (name, email, age, created_at) values ("bob3", "a0", 3,111113);
 insert into users (name, email, age, created_at) values ("bob4", "a", 1,111211);
-insert into users (name, email, age, created_at) values ("bob5", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob6", "a", 1,111111);
-insert into users (name, email, age, created_at) values ("bob7", "a", 2,111112);
-insert into users (name, email, age, created_at) values ("bob8", "a", 3,111113);
-insert into users (name, email, age, created_at) values ("bob9", "a", 1,111211);
-insert into users (name, email, age, created_at) values ("bob10", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob11", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob12", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob13", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob14", "a", 4,111114);
-insert into users (name, email, age, created_at) values ("bob15", "a", 4,111114);
+insert into users (name, email, age, created_at) values ("bob5", "ba", 4,111114);
+insert into users (name, email, age, created_at) values ("bob6", "ac", 1,111111);
+insert into users (name, email, age, created_at) values ("bob7", "ab", 2,111112);
+insert into users (name, email, age, created_at) values ("bob8", "ar", 3,111113);
+insert into users (name, email, age, created_at) values ("bob9", "at", 1,111211);
+insert into users (name, email, age, created_at) values ("bob10", "a1", 4,111114);
+insert into users (name, email, age, created_at) values ("bob11", "a2", 4,111114);
+insert into users (name, email, age, created_at) values ("bob12", "a3", 4,111114);
+insert into users (name, email, age, created_at) values ("bob13", "a4", 4,111114);
+insert into users (name, email, age, created_at) values ("bob14", "a5", 4,111114);
+insert into users (name, email, age, created_at) values ("bob15", "a6", 4,111114);
 
 CREATE TABLE products_vec (    id INT32 PRIMARY KEY,    name TEXT,    embedding VECTOR(4) WITH DISTANCE=IP);
 CREATE INDEX idx_products_embedding ON products_vec (embedding) USING HNSW WITH (M=16, ef_construction=200);
