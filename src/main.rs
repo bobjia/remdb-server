@@ -6,120 +6,20 @@ use remdb::{
 use clap::Parser;
 use core::ptr;
 use remdb_server::jdbc_server::JdbcServer;
-use remdb_server::{is_debug_mode, set_debug_mode, set_global_log_handle};
+use remdb_server::{is_debug_mode, set_debug_mode};
+use remdb::log::{error, info, warn};
 use serde::Deserialize;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tracing::{Level};
-use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 
-#[macro_use]
 mod macros;
 mod benchmark;
 mod cli;
 mod ddl_compiler;
 mod snapshot_loader;
 mod sql_engine;
-
-// 全局日志文件句柄
-static mut LOG_FILE_HANDLE: Option<Arc<Mutex<std::fs::File>>> = None;
-
-/// 设置日志文件
-pub fn set_log_file(log_path: &str, debug_mode: bool) -> std::io::Result<String> {
-    // 创建日志目录
-    std::fs::create_dir_all(log_path)?;
-
-    // 获取当前日期作为日志文件名
-    let now = SystemTime::now();
-    let timestamp = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let log_file_path = format!("{}/remdb-server-{}.log", log_path, timestamp);
-
-    // 打开日志文件，以追加模式写入
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .write(true)
-        .open(log_file_path.clone())?;
-
-    // 克隆文件句柄用于 tracing（在包装到 Arc 之前）
-    let file_for_tracing = std::fs::File::try_clone(&file)?;
-
-    // 将文件句柄包装到Arc<Mutex>中，以便多线程安全访问
-    let file_handle = Arc::new(Mutex::new(file));
-
-    // 保存到全局变量
-    unsafe {
-        LOG_FILE_HANDLE = Some(file_handle.clone());
-        set_global_log_handle(file_handle);
-    }
-
-    // 初始化 tracing_subscriber
-    let log_level = if debug_mode { Level::DEBUG } else { Level::INFO };
-    
-    // 配置 tracing 同时输出到控制台和文件
-    registry()
-        .with(
-            fmt::layer()
-                .with_writer(std::io::stdout)
-                .with_ansi(true)
-                .with_level(true)
-                .with_target(true)
-        )
-        .with(
-            fmt::layer()
-                .with_writer(std::sync::Mutex::new(file_for_tracing))
-                .with_ansi(false)
-                .with_level(true)
-                .with_target(true)
-        )
-        .with(
-            EnvFilter::from_default_env()
-                .add_directive(format!("remdb={}", log_level).parse().unwrap())
-                .add_directive(format!("remdb_server={}", log_level).parse().unwrap())
-        )
-        .init();
-
-    Ok(log_file_path)
-}
-
-/// 写入日志到文件
-pub fn write_log_to_file(message: &str) {
-    unsafe {
-        if let Some(ref file_handle) = LOG_FILE_HANDLE {
-            if let Ok(mut file) = file_handle.lock() {
-                let _ = writeln!(file, "{}", message);
-            }
-        }
-    }
-}
-
-/// 重定义标准println宏，使其同时输出到控制台和日志文件
-macro_rules! log_println {
-    ($($args:tt)*) => {
-        {
-            let message = format!($($args)*);
-            println!("{}", message);
-            write_log_to_file(&message);
-        }
-    };
-}
-
-/// 重定义标准eprintln宏，使其同时输出到控制台和日志文件
-macro_rules! log_eprintln {
-    ($($args:tt)*) => {
-        {
-            let message = format!($($args)*);
-            eprintln!("{}", message);
-            write_log_to_file(&message);
-        }
-    };
-}
 
 // 定义Windows平台实现，用于非POSIX平台
 struct WindowsPlatform;
@@ -874,39 +774,44 @@ async fn main() {
     set_debug_mode(debug_mode);
 
     if debug_mode {
-        let message = "Debug mode enabled";
-        println!("{}", message);
+        info!("Debug mode enabled");
     }
 
     // 初始化日志文件
     let log_file_path = log_path.clone().unwrap_or("./logs".to_string());
-    match set_log_file(&log_file_path, debug_mode) {
-        Ok(actual_log_path) => {
-            let message = format!("Log file initialized at: {}", actual_log_path);
-            println!("{}", message);
+    std::fs::create_dir_all(&log_file_path).ok();
+    let now = SystemTime::now();
+    let timestamp = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let log_file_name = format!("{}/remdb-server-{}.log", log_file_path, timestamp);
+    
+    match remdb::init_logger_with_file(&log_file_name, debug_mode) {
+        Ok(_) => {
+            info!("Log file initialized at: {}", log_file_name);
         }
         Err(err) => {
-            let message = format!("Warning: Failed to initialize log file: {:?}", err);
-            eprintln!("{}", message);
+            warn!("Failed to initialize log file: {:?}", err);
         }
     }
 
     // 手动初始化平台
-    log_println!("Manually initializing platform...");
+    info!("Manually initializing platform...");
     remdb::platform::init_platform(&WINDOWS_PLATFORM);
-    log_println!("Platform initialized manually");
+    info!("Platform initialized manually");
 
     // 尝试从config中获取ddl_path，如果存在则加载
     let ddl_path = config.ddl_path.as_deref().unwrap_or("");
     let (tables, insert_statements): (Vec<remdb::TableDef>, Vec<String>) = if !ddl_path.is_empty() {
-        log_println!("Loading DDL file: {}", ddl_path);
+        info!("Loading DDL file: {}", ddl_path);
         match ddl_compiler::compile_ddl_file(ddl_path) {
             Ok(result) => {
-                log_println!("✓ DDL file loaded successfully, {} tables created", result.0.len());
+                info!("DDL file loaded successfully, {} tables created", result.0.len());
                 result
             },
             Err(err) => {
-                log_eprintln!("Warning: Failed to load DDL file: {}, using empty tables", err);
+                warn!("Failed to load DDL file: {}, using empty tables", err);
                 (Vec::new(), Vec::new())
             }
         }
@@ -996,10 +901,10 @@ async fn main() {
 
     // 初始化HA manager（在内存分配器和数据库初始化之前，因为HA可能依赖于特定的初始化顺序）
     if ha_enabled {
-        log_println!("Initializing HA manager...");
+        info!("Initializing HA manager...");
         match remdb::ha::init(config) {
-            Ok(_) => log_println!("✓ HA manager initialized successfully"),
-            Err(e) => log_eprintln!("Error: Failed to initialize HA manager: {}", e),
+            Ok(_) => info!("HA manager initialized successfully"),
+            Err(e) => error!("Failed to initialize HA manager: {}", e),
         }
     }
 
@@ -1012,8 +917,8 @@ async fn main() {
     if let Err(err) =
         unsafe { remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory) }
     {
-        log_eprintln!(
-            "Error: Failed to initialize global memory allocator: {:?}",
+        error!(
+            "Failed to initialize global memory allocator: {:?}",
             err
         );
         return;
@@ -1023,54 +928,54 @@ async fn main() {
     let mut db = match unsafe { remdb::init_global_db(config) } {
         Ok(db) => db,
         Err(err) => {
-            log_eprintln!("Error: Failed to initialize global database: {:?}", err);
+            error!("Failed to initialize global database: {:?}", err);
             return;
         }
     };
 
-    log_println!("Database initialized with {} tables", config.tables.len());
+    info!("Database initialized with {} tables", config.tables.len());
 
     // 标记是否从快照或WAL恢复了数据
     let mut data_restored = false;
 
     // 加载全量镜像文件（优先级最高）
     if let Some(full_image_path) = &full_image {
-        log_println!("Loading full image file: {}", full_image_path);
+        info!("Loading full image file: {}", full_image_path);
         if let Err(err) = db.restore_snapshot(full_image_path) {
-            log_eprintln!("Error: Failed to load full image: {:?}", err);
+            error!("Failed to load full image: {:?}", err);
         } else {
-            log_println!("Full image loaded successfully");
+            info!("Full image loaded successfully");
             data_restored = true;
         }
     } else {
         // 从WAL目录恢复数据（如果配置了WAL）
         let wal_dir = &config.wal_config.log_path;
-        log_println!("Checking WAL directory: {}", wal_dir);
+        info!("Checking WAL directory: {}", wal_dir);
         if std::path::Path::new(wal_dir).exists() {
-            log_println!("Loading and recovering from WAL directory: {}", wal_dir);
+            info!("Loading and recovering from WAL directory: {}", wal_dir);
             if let Err(err) = snapshot_loader::load_from_wal_dir(&mut db, wal_dir) {
-                log_eprintln!("Warning: Failed to recover from WAL: {:?}", err);
+                warn!("Failed to recover from WAL: {:?}", err);
                 // 如果WAL恢复失败，尝试从快照目录加载
                 if let Some(snapshot_dir) = &snapshot_dir {
-                    log_println!("Falling back to snapshot directory: {}", snapshot_dir);
+                    info!("Falling back to snapshot directory: {}", snapshot_dir);
                     if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
-                        log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
+                        warn!("Failed to load snapshot: {:?}", err);
                     } else {
-                        log_println!("Snapshot loaded successfully");
+                        info!("Snapshot loaded successfully");
                         data_restored = true;
                     }
                 }
             } else {
-                log_println!("Data recovered successfully from WAL");
+                info!("Data recovered successfully from WAL");
                 data_restored = true;
             }
         } else if let Some(snapshot_dir) = &snapshot_dir {
             // 如果没有WAL目录，尝试从快照目录加载
-            log_println!("Loading snapshot from directory: {}", snapshot_dir);
+            info!("Loading snapshot from directory: {}", snapshot_dir);
             if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
-                log_eprintln!("Warning: Failed to load snapshot: {:?}", err);
+                warn!("Failed to load snapshot: {:?}", err);
             } else {
-                log_println!("Snapshot loaded successfully");
+                info!("Snapshot loaded successfully");
                 data_restored = true;
             }
         }
@@ -1078,36 +983,36 @@ async fn main() {
 
     // 执行DDL文件中的INSERT语句（仅当没有从快照或WAL恢复数据时）
     if !insert_statements.is_empty() && !data_restored {
-        log_println!(
+        info!(
             "Executing {} INSERT statements from DDL file",
             insert_statements.len()
         );
         for stmt in insert_statements {
-            log_println!("Executing: {}", stmt);
+            info!("Executing: {}", stmt);
             match sql_engine::execute_extended_sql(&mut db, &stmt) {
                 Ok(result) => {
-                    log_println!(
-                        "✓ INSERT executed successfully, affected rows: {}",
+                    info!(
+                        "INSERT executed successfully, affected rows: {}",
                         result.affected_rows
                     );
                 }
                 Err(err) => {
-                    log_eprintln!("Error: Failed to execute INSERT statement: {}", err);
-                    log_eprintln!("Statement: {}", stmt);
+                    error!("Failed to execute INSERT statement: {}", err);
+                    error!("Statement: {}", stmt);
                 }
             }
         }
     } else if !insert_statements.is_empty() && data_restored {
-        log_println!("Skipping INSERT statements from DDL file (data already restored from snapshot/WAL)");
+        info!("Skipping INSERT statements from DDL file (data already restored from snapshot/WAL)");
     }
 
     // 测试healthcheck命令
     if args.test_export {
-        log_println!("\n=== Testing HEALTHCHECK command ===");
+        info!("\n=== Testing HEALTHCHECK command ===");
         match sql_engine::execute_extended_sql(&mut db, "healthcheck") {
             Ok(result) => {
-                log_println!("\nHealthcheck result:");
-                log_println!(
+                info!("\nHealthcheck result:");
+                info!(
                     "+--------------------+----------+------------------------------------------------------------------+"
                 );
                 for (i, row) in result.rows.iter().enumerate() {
@@ -1118,8 +1023,8 @@ async fn main() {
                             line.push_str(&format!(" {:<18} ", col));
                             line.push('|');
                         }
-                        log_println!("{}", line);
-                        log_println!(
+                        info!("{}", line);
+                        info!(
                             "+--------------------+----------+------------------------------------------------------------------+"
                         );
                     }
@@ -1133,14 +1038,14 @@ async fn main() {
                         line.push_str(&format!(" {:width$} ", value, width = width));
                         line.push('|');
                     }
-                    log_println!("{}", line);
+                    info!("{}", line);
                 }
-                log_println!(
+                info!(
                     "+--------------------+----------+------------------------------------------------------------------+"
                 );
             }
             Err(err) => {
-                log_eprintln!("Error: Failed to execute healthcheck: {}", err);
+                error!("Failed to execute healthcheck: {}", err);
             }
         }
     }
@@ -1178,13 +1083,13 @@ async fn main() {
             password_hash,
         );
 
-        log_println!(
+        info!(
             "Starting JDBC server on port {} with max connections {} and timeout {} seconds",
             actual_jdbc_port,
             max_conns,
             jdbc_timeout
         );
-        log_println!(
+        info!(
             "JDBC authentication: {}",
             if auth_enabled { "enabled" } else { "disabled" }
         );
@@ -1192,17 +1097,17 @@ async fn main() {
         // 在后台启动JDBC服务器
         tokio::spawn(async move {
             if let Err(e) = jdbc_server.start().await {
-                log_eprintln!("Error: JDBC server failed to start: {:?}", e);
+                error!("JDBC server failed to start: {:?}", e);
             }
         });
     } else {
-        log_println!("JDBC server is disabled");
+        info!("JDBC server is disabled");
     }
 
     // 添加定时器线程，定期检查是否需要创建checkpoint
     let checkpoint_interval = wal_checkpoint_interval_ms.unwrap_or(30000);
     if checkpoint_interval > 0 {
-        log_println!(
+        info!(
             "Starting checkpoint timer with interval {} ms",
             checkpoint_interval
         );
@@ -1225,17 +1130,17 @@ async fn main() {
                     match unsafe { log_manager.check_flush_and_checkpoint() } {
                         Ok(()) => {
                             let duration = start.elapsed();
-                            println!(
+                            info!(
                                 "[Checkpoint Timer] Checkpoint executed successfully in {:?}",
                                 duration
                             );
                         }
                         Err(e) => {
-                            println!("[Checkpoint Timer] Failed to execute checkpoint: {:?}", e);
+                            error!("[Checkpoint Timer] Failed to execute checkpoint: {:?}", e);
                         }
                     }
                 } else {
-                    println!("[Checkpoint Timer] LogManager not available");
+                    warn!("[Checkpoint Timer] LogManager not available");
                 }
             }
         });
@@ -1250,7 +1155,7 @@ async fn main() {
                 let snapshot_dir_clone = snapshot_dir.clone();
                 let max_snapshots = max_incremental_snapshots.unwrap_or(10);
 
-                log_println!(
+                info!(
                     "Starting snapshot timer with interval {} seconds, type: {}",
                     interval_secs,
                     snap_type
@@ -1296,20 +1201,20 @@ async fn main() {
                             match result {
                                 Ok(()) => {
                                     let duration = start.elapsed();
-                                    println!(
+                                    info!(
                                         "[Snapshot Timer] {} snapshot executed successfully in {:?}",
                                         snap_type, duration
                                     );
                                 }
                                 Err(e) => {
-                                    println!(
+                                    error!(
                                         "[Snapshot Timer] Failed to execute {} snapshot: {:?}",
                                         snap_type, e
                                     );
                                 }
                             }
                         } else {
-                            println!("[Snapshot Timer] Database not available");
+                            warn!("[Snapshot Timer] Database not available");
                         }
                     }
                 });
@@ -1352,15 +1257,15 @@ async fn main() {
 
         // 初始化PubSub系统
         if let Err(err) = pubsub_init(pubsub_config) {
-            log_eprintln!("Warning: Failed to initialize PubSub system: {:?}", err);
+            warn!("Failed to initialize PubSub system: {:?}", err);
         } else {
-            log_println!(
+            info!(
                 "PubSub system initialized successfully on port {}",
                 pubsub_port
             );
         }
     } else {
-        log_println!("PubSub server is disabled");
+        info!("PubSub server is disabled");
     }
 
     // 启动交互式控制台（如果启用且不是非交互式模式）
@@ -1370,42 +1275,42 @@ async fn main() {
             let mut db_lock = db_arc.lock().unwrap();
             cli::run_cli(&mut db_lock);
         } else {
-            log_println!(
+            info!(
                 "\n--- JDBC server is running on port {} ---",
                 actual_jdbc_port
             );
-            log_println!("Interactive CLI is disabled when JDBC server is running.");
-            log_println!("Use --non-interactive=false to enable CLI in non-JDBC mode.");
-            log_println!("Press Ctrl+C to stop the server");
+            info!("Interactive CLI is disabled when JDBC server is running.");
+            info!("Use --non-interactive=false to enable CLI in non-JDBC mode.");
+            info!("Press Ctrl+C to stop the server");
             tokio::signal::ctrl_c().await.unwrap();
-            log_println!("\nStopping JDBC server...");
+            info!("\nStopping JDBC server...");
         }
     } else {
         // 非交互式模式下，如果启用了JDBC服务，等待Ctrl+C
         if should_start_jdbc {
-            log_println!(
+            info!(
                 "\n--- JDBC server is running on port {} ---",
                 actual_jdbc_port
             );
-            log_println!("Press Ctrl+C to stop the server");
+            info!("Press Ctrl+C to stop the server");
             tokio::signal::ctrl_c().await.unwrap();
-            log_println!("\nStopping JDBC server...");
+            info!("\nStopping JDBC server...");
         }
     }
 
     // 程序退出前关闭HA manager
     if ha_enabled {
-        log_println!("Stopping HA manager...");
+        info!("Stopping HA manager...");
         use remdb::ha::shutdown as ha_shutdown;
         if let Err(err) = ha_shutdown() {
-            log_eprintln!("Warning: Failed to shutdown HA manager: {:?}", err);
+            warn!("Failed to shutdown HA manager: {:?}", err);
         }
     }
 
     // 程序退出前关闭PubSub系统
-    log_println!("Stopping PubSub server...");
+    info!("Stopping PubSub server...");
     use remdb::pubsub::shutdown as pubsub_shutdown;
     if let Err(err) = pubsub_shutdown() {
-        log_eprintln!("Warning: Failed to shutdown PubSub server: {:?}", err);
+        warn!("Failed to shutdown PubSub server: {:?}", err);
     }
 }

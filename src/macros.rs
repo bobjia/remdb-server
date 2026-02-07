@@ -2,9 +2,7 @@
 macro_rules! debug_println {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            let message = format!($($args)*);
-            println!("{}", message);
-            crate::write_log_to_file(&message);
+            println!($($args)*);
         }
     };
 }
@@ -13,9 +11,7 @@ macro_rules! debug_println {
 macro_rules! debug_eprintln {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            let message = format!($($args)*);
-            eprintln!("{}", message);
-            crate::write_log_to_file(&message);
+            eprintln!($($args)*);
         }
     };
 }

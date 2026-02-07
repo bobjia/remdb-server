@@ -2,6 +2,22 @@ use crate::ddl_compiler::DdlError;
 use remdb::{DdlExecutor, RemDb, RemDbError, MAX_STRING_LEN, MAX_TEXT_LEN, json::JsonDocument};
 use thiserror::Error;
 
+macro_rules! debug_println {
+    ($($args:tt)*) => {
+        if crate::is_debug_mode() {
+            println!($($args)*);
+        }
+    };
+}
+
+macro_rules! debug_eprintln {
+    ($($args:tt)*) => {
+        if crate::is_debug_mode() {
+            eprintln!($($args)*);
+        }
+    };
+}
+
 #[derive(Error, Debug)]
 pub enum SqlError {
     #[error("Database error: {0}")]
@@ -512,9 +528,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
     // 调试：打印要执行的SQL语句
     if crate::is_debug_mode() {
-        let message = format!("Debug: Executing SELECT SQL: {}", sql);
-        println!("{}", message);
-        crate::write_log_to_file(&message);
+        println!("Debug: Executing SELECT SQL: {}", sql);
     }
 
     // 调试：手动查找表名
