@@ -13,6 +13,8 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+use tracing::{Level};
+use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
 
 #[macro_use]
 mod macros;
@@ -26,7 +28,7 @@ mod sql_engine;
 static mut LOG_FILE_HANDLE: Option<Arc<Mutex<std::fs::File>>> = None;
 
 /// 设置日志文件
-pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
+pub fn set_log_file(log_path: &str, debug_mode: bool) -> std::io::Result<String> {
     // 创建日志目录
     std::fs::create_dir_all(log_path)?;
 
@@ -43,7 +45,10 @@ pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
         .create(true)
         .append(true)
         .write(true)
-        .open(log_file_path)?;
+        .open(log_file_path.clone())?;
+
+    // 克隆文件句柄用于 tracing（在包装到 Arc 之前）
+    let file_for_tracing = std::fs::File::try_clone(&file)?;
 
     // 将文件句柄包装到Arc<Mutex>中，以便多线程安全访问
     let file_handle = Arc::new(Mutex::new(file));
@@ -54,7 +59,33 @@ pub fn set_log_file(log_path: &str) -> std::io::Result<()> {
         set_global_log_handle(file_handle);
     }
 
-    Ok(())
+    // 初始化 tracing_subscriber
+    let log_level = if debug_mode { Level::DEBUG } else { Level::INFO };
+    
+    // 配置 tracing 同时输出到控制台和文件
+    registry()
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stdout)
+                .with_ansi(true)
+                .with_level(true)
+                .with_target(true)
+        )
+        .with(
+            fmt::layer()
+                .with_writer(std::sync::Mutex::new(file_for_tracing))
+                .with_ansi(false)
+                .with_level(true)
+                .with_target(true)
+        )
+        .with(
+            EnvFilter::from_default_env()
+                .add_directive(format!("remdb={}", log_level).parse().unwrap())
+                .add_directive(format!("remdb_server={}", log_level).parse().unwrap())
+        )
+        .init();
+
+    Ok(log_file_path)
 }
 
 /// 写入日志到文件
@@ -849,12 +880,15 @@ async fn main() {
 
     // 初始化日志文件
     let log_file_path = log_path.clone().unwrap_or("./logs".to_string());
-    if let Err(err) = set_log_file(&log_file_path) {
-        let message = format!("Warning: Failed to initialize log file: {:?}", err);
-        eprintln!("{}", message);
-    } else {
-        let message = format!("Log file initialized at: {}", log_file_path);
-        println!("{}", message);
+    match set_log_file(&log_file_path, debug_mode) {
+        Ok(actual_log_path) => {
+            let message = format!("Log file initialized at: {}", actual_log_path);
+            println!("{}", message);
+        }
+        Err(err) => {
+            let message = format!("Warning: Failed to initialize log file: {:?}", err);
+            eprintln!("{}", message);
+        }
     }
 
     // 手动初始化平台
