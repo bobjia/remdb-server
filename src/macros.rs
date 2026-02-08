@@ -2,7 +2,7 @@
 macro_rules! debug_println {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            println!($($args)*);
+            remdb::log::info!($($args)*);
         }
     };
 }
@@ -11,7 +11,7 @@ macro_rules! debug_println {
 macro_rules! debug_eprintln {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            eprintln!($($args)*);
+            remdb::log::error!($($args)*);
         }
     };
 }

@@ -1,11 +1,12 @@
 use crate::ddl_compiler::DdlError;
 use remdb::{DdlExecutor, RemDb, RemDbError, MAX_STRING_LEN, MAX_TEXT_LEN, json::JsonDocument};
+use remdb::log::{info, error};
 use thiserror::Error;
 
 macro_rules! debug_println {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            println!($($args)*);
+            info!($($args)*);
         }
     };
 }
@@ -13,7 +14,7 @@ macro_rules! debug_println {
 macro_rules! debug_eprintln {
     ($($args:tt)*) => {
         if crate::is_debug_mode() {
-            eprintln!($($args)*);
+            error!($($args)*);
         }
     };
 }
@@ -528,7 +529,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
 
     // 调试：打印要执行的SQL语句
     if crate::is_debug_mode() {
-        println!("Debug: Executing SELECT SQL: {}", sql);
+        info!("Debug: Executing SELECT SQL: {}", sql);
     }
 
     // 调试：手动查找表名

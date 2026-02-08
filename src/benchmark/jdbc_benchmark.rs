@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::task;
 
+use remdb::log::info;
+
 /// 基准测试类型
 #[derive(Clone)]
 enum BenchmarkType {
@@ -515,19 +517,18 @@ impl Default for BenchmarkConfig {
 
 /// 运行基准测试的命令行工具
 pub async fn run_benchmark(config: BenchmarkConfig) -> std::io::Result<BenchmarkResult> {
-    println!("Starting JDBC benchmark with configuration:");
-    println!("  Server URL: {}", config.server_url);
-    println!("  Connection Count: {}", config.connection_count);
-    println!("  Query Count: {}", config.query_count);
-    println!("  Test Type: {}", config.test_type);
-    println!("  Query Template: {}", config.query_template);
-    println!("  Write Template: {}", config.write_template);
-    println!(
+    info!("Starting JDBC benchmark with configuration:");
+    info!("  Server URL: {}", config.server_url);
+    info!("  Connection Count: {}", config.connection_count);
+    info!("  Query Count: {}", config.query_count);
+    info!("  Test Type: {}", config.test_type);
+    info!("  Query Template: {}", config.query_template);
+    info!("  Write Template: {}", config.write_template);
+    info!(
         "  Read-Write Ratio: {}:{}",
         config.read_write_ratio.0, config.read_write_ratio.1
     );
-    println!("  Run Duration: {:?}", config.run_duration_secs);
-    println!();
+    info!("  Run Duration: {:?}", config.run_duration_secs);
 
     let mut benchmark = JdbcBenchmark::new(
         config.server_url,
@@ -542,39 +543,39 @@ pub async fn run_benchmark(config: BenchmarkConfig) -> std::io::Result<Benchmark
     match config.test_type.to_lowercase().as_str() {
         "write" => {
             benchmark.set_write_test();
-            println!("Running write benchmark...");
+            info!("Running write benchmark...");
         }
         "mix" => {
             benchmark.set_mix_test();
-            println!(
+            info!(
                 "Running mixed read-write benchmark with ratio {}:{}",
                 config.read_write_ratio.0, config.read_write_ratio.1
             );
         }
         _ => {
             benchmark.set_query_test();
-            println!("Running query benchmark...");
+            info!("Running query benchmark...");
         }
     }
 
     let result = benchmark.run().await;
 
-    println!("\nBenchmark Results:");
-    println!("================");
-    println!("Total Queries: {}", result.total_queries);
-    println!("Total Time: {:.2} seconds", result.total_time_secs);
-    println!("Throughput: {:.2} QPS", result.throughput_qps);
-    println!("Average Latency: {} ns", result.avg_latency_ns);
-    println!("P95 Latency: {} ns", result.p95_latency_ns);
-    println!("P99 Latency: {} ns", result.p99_latency_ns);
-    println!("Min Latency: {} ns", result.min_latency_ns);
-    println!("Max Latency: {} ns", result.max_latency_ns);
-    println!(
+    info!("\nBenchmark Results:");
+    info!("================");
+    info!("Total Queries: {}", result.total_queries);
+    info!("Total Time: {:.2} seconds", result.total_time_secs);
+    info!("Throughput: {:.2} QPS", result.throughput_qps);
+    info!("Average Latency: {} ns", result.avg_latency_ns);
+    info!("P95 Latency: {} ns", result.p95_latency_ns);
+    info!("P99 Latency: {} ns", result.p99_latency_ns);
+    info!("Min Latency: {} ns", result.min_latency_ns);
+    info!("Max Latency: {} ns", result.max_latency_ns);
+    info!(
         "Successful Queries: {} ({:.2}%)",
         result.successful_queries,
         (result.successful_queries as f64 / result.total_queries as f64) * 100.0
     );
-    println!(
+    info!(
         "Failed Queries: {} ({:.2}%)",
         result.failed_queries,
         (result.failed_queries as f64 / result.total_queries as f64) * 100.0
@@ -583,12 +584,12 @@ pub async fn run_benchmark(config: BenchmarkConfig) -> std::io::Result<Benchmark
     // 生成HTML报告
     let html_path = "benchmark_report.html";
     benchmark.generate_html_report(&result, html_path)?;
-    println!("\nHTML report generated: {}", html_path);
+    info!("\nHTML report generated: {}", html_path);
 
     // 生成JSON报告
     let json_path = "benchmark_results.json";
     benchmark.generate_json_report(&result, json_path)?;
-    println!("JSON report generated: {}", json_path);
+    info!("JSON report generated: {}", json_path);
 
     Ok(result)
 }

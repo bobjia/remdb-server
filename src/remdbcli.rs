@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use remdb::log::error;
+
 // 添加protobuf相关导入
 use prost::Message;
 use remdb_server::proto::*;
@@ -55,11 +57,11 @@ fn main() {
         Ok(stream) => {
             // 设置读写超时
             if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
-                eprintln!("Failed to set read timeout: {}", e);
+                error!("Failed to set read timeout: {}", e);
                 std::process::exit(1);
             }
             if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
-                eprintln!("Failed to set write timeout: {}", e);
+                error!("Failed to set write timeout: {}", e);
                 std::process::exit(1);
             }
 
@@ -69,7 +71,7 @@ fn main() {
             stream
         }
         Err(e) => {
-            eprintln!("Failed to connect to JDBC server at {}: {}", addr, e);
+            error!("Failed to connect to JDBC server at {}: {}", addr, e);
             std::process::exit(1);
         }
     };
@@ -93,7 +95,7 @@ fn main() {
 
     println!("Sending connection request...");
     if let Err(e) = send_jdbc_request(&mut stream, &jdbc_request) {
-        eprintln!("Failed to send connection request: {}", e);
+        error!("Failed to send connection request: {}", e);
         std::process::exit(1);
     }
 
@@ -103,12 +105,12 @@ fn main() {
             println!("Connection response received, status: {}", response.status);
             if response.status != 0 {
                 // 0 是 Status::OK 的值
-                eprintln!("Authentication failed: {}", response.error_message);
+                error!("Authentication failed: {}", response.error_message);
                 std::process::exit(1);
             }
         }
         Err(e) => {
-            eprintln!("Failed to read connection response: {}", e);
+            error!("Failed to read connection response: {}", e);
             std::process::exit(1);
         }
     }
@@ -172,7 +174,7 @@ fn main() {
                 if command.starts_with("use database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        eprintln!("Error: Invalid use database command. Use 'use database <database_name>'.");
+                        error!("Error: Invalid use database command. Use 'use database <database_name>'.");
                         continue;
                     }
                     
@@ -186,7 +188,7 @@ fn main() {
                 if command.starts_with("close database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        eprintln!("Error: Invalid close database command. Use 'close database <database_name>'.");
+                        error!("Error: Invalid close database command. Use 'close database <database_name>'.");
                         continue;
                     }
                     
@@ -213,7 +215,7 @@ fn main() {
                 if command.starts_with("source ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 2 {
-                        eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
+                        error!("Error: Invalid source command. Use 'source <file_path>'.");
                         continue;
                     }
 
@@ -257,7 +259,7 @@ fn main() {
                             println!("✓ Successfully executed commands from file: {}", file_path);
                         }
                         Err(err) => {
-                            eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
+                            error!("Error: Failed to read file {}: {:?}", file_path, err);
                         }
                     }
                     continue;
@@ -271,7 +273,7 @@ fn main() {
                 break;
             }
             Err(e) => {
-                eprintln!("Error reading input: {}", e);
+                error!("Error reading input: {}", e);
                 break;
             }
         }
@@ -279,9 +281,9 @@ fn main() {
 
     // 关闭连接 - 暂时简化，后续完善
     // if let Err(e) = writeln!(stream, "CLOSE") {
-    //     eprintln!("Failed to send close command: {}", e);
+    //     error!("Failed to send close command: {}", e);
     // } else if let Err(e) = stream.flush() {
-    //     eprintln!("Failed to flush close command: {}", e);
+    //     error!("Failed to flush close command: {}", e);
     // }
 }
 
@@ -329,7 +331,7 @@ fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_
     
     // 如果需要数据库上下文但未选择，则返回错误
     if needs_database && current_database.is_none() {
-        eprintln!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
+        error!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
         return;
     }
 
@@ -349,7 +351,7 @@ fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_
 
     // 发送请求
     if let Err(e) = send_jdbc_request(stream, &jdbc_request) {
-        eprintln!("Failed to send SQL command: {}", e);
+        error!("Failed to send SQL command: {}", e);
         return;
     }
 
@@ -359,7 +361,7 @@ fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_
             process_jdbc_response(&response);
         }
         Err(e) => {
-            eprintln!("Failed to read SQL response: {}", e);
+            error!("Failed to read SQL response: {}", e);
             return;
         }
     }
@@ -398,7 +400,7 @@ fn process_jdbc_response(response: &JdbcResponse) {
         }
     } else {
         // 处理错误响应
-        eprintln!("Error: {}", response.error_message);
+        error!("Error: {}", response.error_message);
     }
 }
 

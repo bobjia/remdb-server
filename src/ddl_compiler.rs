@@ -1,4 +1,5 @@
 use remdb::types::{DataType, FieldDef, TableDef};
+use remdb::log::info;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -67,11 +68,11 @@ pub fn parse_ddl_content(
         .filter(|s| !s.is_empty())
         .collect();
 
-    println!("Debug: Found {} statements in DDL", statements.len());
+    info!("Debug: Found {} statements in DDL", statements.len());
 
     // 处理每个语句
     for (i, statement) in statements.iter().enumerate() {
-        println!("Debug: Statement {}: {}", i, statement);
+        info!("Debug: Statement {}: {}", i, statement);
         let words: Vec<&str> = statement.split_whitespace().collect();
         if words.len() >= 3
             && (words[0].eq_ignore_ascii_case("CREATE") || words[0].eq_ignore_ascii_case("create"))
@@ -152,7 +153,7 @@ pub fn parse_ddl_content(
         {
             // 处理INSERT语句
             let insert_stmt = statement.to_string();
-            println!("Debug: Found INSERT statement: {}", insert_stmt);
+            info!("Debug: Found INSERT statement: {}", insert_stmt);
             insert_statements.push(insert_stmt);
         }
     }
@@ -274,6 +275,7 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
     // 检查AUTO_INCREMENT约束（支持多种写法）
     if constraints_lower.contains("auto_increment") || constraints_lower.contains("autoincrement") {
         auto_increment = true;
+        info!("Debug: column {} has AUTO_INCREMENT", name);
     }
 
     // 检查默认值约束
@@ -461,6 +463,28 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
 
         return Ok((DataType::VarChar, size));
     }
+    if typ_lower.starts_with("char") {
+        // 查找括号
+        let left_paren = typ_lower.find('(').ok_or(DdlError::Parsing(format!(
+            "Invalid CHAR syntax: missing size in '{}'",
+            typ
+        )))?;
+        let right_paren = typ_lower[left_paren..]
+            .find(')')
+            .ok_or(DdlError::Parsing(format!(
+                "Invalid CHAR syntax: missing closing parenthesis in '{}'",
+                typ
+            )))?
+            + left_paren
+            + 1;
+
+        let size_str = &typ_lower[left_paren + 1..right_paren - 1];
+        let size = size_str
+            .parse::<usize>()
+            .map_err(|_| DdlError::Parsing(format!("Invalid size for CHAR type: {}", typ)))?;
+
+        return Ok((DataType::Char, size));
+    }
 
     // 处理布尔类型
     if typ_lower.starts_with("boolean") || typ_lower.starts_with("bool") {
@@ -527,6 +551,7 @@ fn create_table_def(
     let mut field_defs = Vec::new();
 
     for col in columns {
+        info!("Debug: creating field {}: primary_key={}, auto_increment={}", col.name, col.primary_key, col.auto_increment);
         let field_def = FieldDef {
             name: col.name.to_string(),
             data_type: col.data_type,
@@ -637,7 +662,7 @@ mod tests {
                     fields[1].size
                 );
 
-                println!("✓ CREATE TABLE with AUTO_INCREMENT and VARCHAR(n) parsed successfully!");
+                info!("✓ CREATE TABLE with AUTO_INCREMENT and VARCHAR(n) parsed successfully!");
             }
             Err(err) => {
                 panic!("CREATE TABLE parsing failed: {:?}", err);

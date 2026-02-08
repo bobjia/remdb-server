@@ -575,8 +575,8 @@ async fn main() {
 
     let args = Args::parse();
 
-    let message = "remdb-server v0.1.0";
-    println!("{}", message);
+    let message = "remdb-server v0.2.0";
+    info!("{}", message);
 
     // 处理子命令
     if let Some(Command::Benchmark {
@@ -601,7 +601,7 @@ async fn main() {
         {
             [Ok(read), Ok(write)] => (*read, *write),
             _ => {
-                eprintln!("Invalid read_write_ratio format. Expected format: \"8:2\".");
+                error!("Invalid read_write_ratio format. Expected format: \"8:2\".");
                 std::process::exit(1);
             }
         };
@@ -618,9 +618,9 @@ async fn main() {
         };
 
         match run_benchmark(config).await {
-            Ok(_) => println!("\nBenchmark completed successfully!"),
+            Ok(_) => info!("\nBenchmark completed successfully!"),
             Err(e) => {
-                eprintln!("\nBenchmark failed: {}", e);
+                error!("\nBenchmark failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -660,26 +660,26 @@ async fn main() {
     // 重新初始化配置，因为上面的代码只是为了获取 debug 模式
     let mut config = Config::default();
     let message = format!("Reading config file: {}", config_path);
-    println!("{}", message);
+    info!("{}", message);
     match fs::read_to_string(&config_path) {
         Ok(content) => match toml::from_str(&content) {
             Ok(parsed_config) => {
                 config = parsed_config;
                 let message = "Config file loaded successfully";
-                println!("{}", message);
+                info!("{}", message);
             }
             Err(err) => {
                 let message = format!("Warning: Failed to parse config file: {:?}", err);
-                eprintln!("{}", message);
+                warn!("{}", message);
                 let message = "Using default config values";
-                eprintln!("{}", message);
+                warn!("{}", message);
             }
         },
         Err(err) => {
             let message = format!("Warning: Failed to read config file: {:?}", err);
-            eprintln!("{}", message);
+            warn!("{}", message);
             let message = "Using default config values";
-            eprintln!("{}", message);
+            warn!("{}", message);
         }
     }
 
@@ -826,8 +826,51 @@ async fn main() {
             }
         }
     } else {
-        // 没有配置DDL文件，使用空表列表
-        (Vec::new(), Vec::new())
+        // 没有配置DDL文件，尝试从快照目录加载表定义
+        let mut tables_from_snapshot = Vec::new();
+        let mut snapshot_dir_for_recovery = None;
+
+        // 优先从快照目录加载表定义
+        if let Some(dir) = &snapshot_dir {
+            info!("No DDL file configured, attempting to load table definitions from snapshot directory: {}", dir);
+            match snapshot_loader::load_table_defs_from_dir(dir) {
+                Ok(loaded_tables) => {
+                    info!("Loaded {} table definitions from snapshot directory", loaded_tables.len());
+                    tables_from_snapshot = loaded_tables;
+                    snapshot_dir_for_recovery = Some(dir.clone());
+                }
+                Err(err) => {
+                    warn!("Failed to load table definitions from snapshot directory: {:?}", err);
+                }
+            }
+        }
+
+        // 如果快照目录没有，尝试从WAL目录加载
+        if tables_from_snapshot.is_empty() {
+            let wal_dir = &config.wal.as_ref().and_then(|w| w.log_path.clone()).unwrap_or_else(|| "./wal".to_string());
+            info!("Attempting to load table definitions from WAL directory: {}", wal_dir);
+            if std::path::Path::new(wal_dir).exists() {
+                // 从WAL目录查找快照文件
+                match snapshot_loader::load_table_defs_from_dir(wal_dir) {
+                    Ok(loaded_tables) => {
+                        info!("Loaded {} table definitions from WAL directory", loaded_tables.len());
+                        tables_from_snapshot = loaded_tables;
+                        snapshot_dir_for_recovery = Some(wal_dir.to_string());
+                    }
+                    Err(err) => {
+                        warn!("Failed to load table definitions from WAL directory: {:?}", err);
+                    }
+                }
+            }
+        }
+
+        if !tables_from_snapshot.is_empty() {
+            info!("Using table definitions loaded from snapshot: {} tables", tables_from_snapshot.len());
+            (tables_from_snapshot, Vec::new())
+        } else {
+            info!("No DDL file and no snapshot found, using empty tables");
+            (Vec::new(), Vec::new())
+        }
     };
 
     // 创建默认内存分配器
@@ -1027,6 +1070,8 @@ async fn main() {
         }
     } else if !insert_statements.is_empty() && data_restored {
         info!("Skipping INSERT statements from DDL file (data already restored from snapshot/WAL)");
+    } else if data_restored {
+        info!("Data restored from snapshot/WAL, no DDL INSERT statements needed");
     }
 
     // 测试healthcheck命令

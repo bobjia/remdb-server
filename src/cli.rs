@@ -3,6 +3,7 @@ use crate::snapshot_loader::{
 };
 use crate::sql_engine::{execute_extended_sql, format_result_set};
 use remdb::RemDb;
+use remdb::log::{info, error};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{Config, Editor};
@@ -10,14 +11,14 @@ use std::env;
 
 /// 运行交互式命令行界面
 pub fn run_cli(db: &mut RemDb) {
-    println!("Interactive console started");
-    println!("Type 'help' for available commands");
-    println!("Type 'exit' to quit");
-    println!("{}", "=".repeat(60));
+    info!("Interactive console started");
+    info!("Type 'help' for available commands");
+    info!("Type 'exit' to quit");
+    info!("{}", "=".repeat(60));
 
     // 初始化快照目录（默认使用当前目录下的snapshots文件夹）
     let snapshot_dir = env::var("REMDB_SNAPSHOT_DIR").unwrap_or_else(|_| "snapshots".to_string());
-    println!("Snapshot directory: {}", snapshot_dir);
+    info!("Snapshot directory: {}", snapshot_dir);
 
     let config = Config::builder()
         .history_ignore_space(true)
@@ -27,7 +28,7 @@ pub fn run_cli(db: &mut RemDb) {
     let mut editor: Editor<(), FileHistory> = match Editor::with_config(config) {
         Ok(editor) => editor,
         Err(err) => {
-            eprintln!("Error: Failed to create editor: {:?}", err);
+            error!("Error: Failed to create editor: {:?}", err);
             return;
         }
     };
@@ -59,26 +60,26 @@ pub fn run_cli(db: &mut RemDb) {
                 if line.starts_with("source ") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() != 2 {
-                        eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
+                        error!("Error: Invalid source command. Use 'source <file_path>'.");
                         continue;
                     }
 
                     let file_path = parts[1];
                     match std::fs::read_to_string(file_path) {
                         Ok(content) => {
-                            println!("Executing commands from file: {}", file_path);
+                            info!("Executing commands from file: {}", file_path);
                             // 执行文件内容
                             match execute_extended_sql(db, &content) {
                                 Ok(result_set) => {
                                     let formatted = format_result_set(&result_set);
-                                    println!("{}", formatted);
-                                    println!(
+                                    info!("{}", formatted);
+                                    info!(
                                         "✓ Successfully executed commands from file: {}",
                                         file_path
                                     );
                                 }
                                 Err(err) => {
-                                    eprintln!(
+                                    error!(
                                         "Error: Failed to execute commands from file {}: {:?}",
                                         file_path, err
                                     );
@@ -86,7 +87,7 @@ pub fn run_cli(db: &mut RemDb) {
                             }
                         }
                         Err(err) => {
-                            eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
+                            error!("Error: Failed to read file {}: {:?}", file_path, err);
                         }
                     }
                     continue;
@@ -96,7 +97,7 @@ pub fn run_cli(db: &mut RemDb) {
                 if line.starts_with("snapshot ") {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() < 2 {
-                        eprintln!(
+                        error!(
                             "Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'."
                         );
                         continue;
@@ -106,23 +107,23 @@ pub fn run_cli(db: &mut RemDb) {
                         "full" => {
                             // 保存完整快照
                             if let Err(err) = save_full_snapshot_to_dir(db, &snapshot_dir) {
-                                eprintln!("Error: Failed to save full snapshot: {:?}", err);
+                                error!("Error: Failed to save full snapshot: {:?}", err);
                             } else {
-                                println!("Full snapshot saved successfully");
+                                info!("Full snapshot saved successfully");
                             }
                         }
                         "incremental" => {
                             // 保存增量快照
                             if let Err(err) = save_incremental_snapshot_to_dir(db, &snapshot_dir) {
-                                eprintln!("Error: Failed to save incremental snapshot: {:?}", err);
+                                error!("Error: Failed to save incremental snapshot: {:?}", err);
                             } else {
-                                println!("Incremental snapshot saved successfully");
+                                info!("Incremental snapshot saved successfully");
                                 // 清理旧快照，保留最新10个
                                 let _ = cleanup_old_snapshots(&snapshot_dir, 10);
                             }
                         }
                         _ => {
-                            eprintln!(
+                            error!(
                                 "Error: Invalid snapshot command. Use 'snapshot full' or 'snapshot incremental'."
                             );
                         }
@@ -134,24 +135,24 @@ pub fn run_cli(db: &mut RemDb) {
                 match execute_extended_sql(db, line) {
                     Ok(result_set) => {
                         let formatted = format_result_set(&result_set);
-                        println!("{}", formatted);
+                        info!("{}", formatted);
                     }
                     Err(err) => {
-                        eprintln!("Error: {:?}", err);
+                        error!("Error: {:?}", err);
                     }
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("^C");
+                info!("^C");
             }
             Err(ReadlineError::Eof) => {
-                println!("\nBye");
+                info!("\nBye");
                 // 保存历史记录
                 let _ = editor.save_history("remdb_history.txt");
                 break;
             }
             Err(err) => {
-                eprintln!("Error: {:?}", err);
+                error!("Error: {:?}", err);
                 break;
             }
         }
@@ -160,23 +161,23 @@ pub fn run_cli(db: &mut RemDb) {
 
 /// 打印帮助信息
 pub fn print_help() {
-    println!("Available commands:");
-    println!("  exit, :q                        - Exit the console");
-    println!("  help                            - Show this help message");
-    println!("  source <file_path>              - Execute SQL/DDL commands from file");
-    println!("  tables                          - List all tables");
-    println!("  describe <table>                - Show table schema");
-    println!("  desc <table>                    - Shortcut for describe");
-    println!("  select ...                      - Execute SELECT query");
-    println!("  create database <name>          - Create a new database");
-    println!("  drop database [if exists] <name> - Drop an existing database");
-    println!("  use database <name>             - Switch to a specified database");
-    println!("  close database <name>           - Close a specified database");
-    println!("  snapshot full                   - Save a full snapshot");
-    println!("  snapshot incremental            - Save an incremental snapshot");
-    println!("  stat                            - Show database monitoring statistics");
-    println!("  healthcheck                     - Check database health status");
-    println!("  export ddl <file>               - Export DDL schema to file");
-    println!("  export data <table> <file>      - Export table data to CSV file");
-    println!("  export all <dir>                - Export both DDL and data to directory");
+    info!("Available commands:");
+    info!("  exit, :q                        - Exit the console");
+    info!("  help                            - Show this help message");
+    info!("  source <file_path>              - Execute SQL/DDL commands from file");
+    info!("  tables                          - List all tables");
+    info!("  describe <table>                - Show table schema");
+    info!("  desc <table>                    - Shortcut for describe");
+    info!("  select ...                      - Execute SELECT query");
+    info!("  create database <name>          - Create a new database");
+    info!("  drop database [if exists] <name> - Drop an existing database");
+    info!("  use database <name>             - Switch to a specified database");
+    info!("  close database <name>           - Close a specified database");
+    info!("  snapshot full                   - Save a full snapshot");
+    info!("  snapshot incremental            - Save an incremental snapshot");
+    info!("  stat                            - Show database monitoring statistics");
+    info!("  healthcheck                     - Check database health status");
+    info!("  export ddl <file>               - Export DDL schema to file");
+    info!("  export data <table> <file>      - Export table data to CSV file");
+    info!("  export all <dir>                - Export both DDL and data to directory");
 }
