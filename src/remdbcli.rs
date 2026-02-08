@@ -6,11 +6,195 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use remdb::log::error;
+use remdb::log::info;
 
-// 添加protobuf相关导入
 use prost::Message;
 use remdb_server::proto::*;
+
+struct ConnectionManager {
+    host: String,
+    port: u16,
+    username: String,
+    password: Option<String>,
+    stream: Option<TcpStream>,
+    max_retries: u32,
+    retry_delay: Duration,
+}
+
+impl ConnectionManager {
+    fn new(host: String, port: u16, username: String, password: Option<String>) -> Self {
+        ConnectionManager {
+            host,
+            port,
+            username,
+            password,
+            stream: None,
+            max_retries: 5,
+            retry_delay: Duration::from_secs(2),
+        }
+    }
+
+    fn connect(&mut self) -> std::io::Result<()> {
+        let addr = format!("{}:{}", self.host, self.port);
+        let socket_addr = addr.parse().expect("Invalid address format");
+
+        let mut retry_count = 0;
+        loop {
+            match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5)) {
+                Ok(mut stream) => {
+                    if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to set read timeout: {}", e),
+                        ));
+                    }
+                    if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to set write timeout: {}", e),
+                        ));
+                    }
+                    stream.set_nodelay(true).unwrap();
+
+                    self.stream = Some(stream);
+                    return Ok(());
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    if retry_count >= self.max_retries {
+                        return Err(e);
+                    }
+                    info!("Connection failed (attempt {}/{}), retrying in {:?}...",
+                          retry_count, self.max_retries, self.retry_delay);
+                    std::thread::sleep(self.retry_delay);
+                }
+            }
+        }
+    }
+
+    fn authenticate(&mut self) -> std::io::Result<()> {
+        let connection_request = ConnectionRequest {
+            username: self.username.clone(),
+            password: self.password.clone().unwrap_or_default(),
+            database: "default".to_string(),
+            fetch_size: 100,
+            auto_commit: true,
+        };
+
+        let jdbc_request = JdbcRequest {
+            request_id: 1,
+            request: Some(jdbc_request::Request::Connection(connection_request)),
+        };
+
+        self.send_jdbc_request(&jdbc_request)?;
+
+        let response = self.read_jdbc_response()?;
+        if response.status != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Authentication failed: {}", response.error_message),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn send_jdbc_request(&mut self, request: &JdbcRequest) -> std::io::Result<()> {
+        let mut retry_count = 0;
+        loop {
+            match self.try_send_jdbc_request(request) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if self.is_connection_error(&e) {
+                        retry_count += 1;
+                        if retry_count >= self.max_retries {
+                            return Err(e);
+                        }
+                        info!("Connection lost, attempting to reconnect (attempt {}/{})...",
+                              retry_count, self.max_retries);
+                        self.reconnect()?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn try_send_jdbc_request(&mut self, request: &JdbcRequest) -> std::io::Result<()> {
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotConnected, "No active connection")
+        })?;
+
+        let mut buf = Vec::with_capacity(request.encoded_len());
+        request.encode(&mut buf)?;
+
+        let len = buf.len() as u32;
+        stream.write_all(&len.to_be_bytes())?;
+        stream.write_all(&buf)?;
+        stream.flush()?;
+
+        Ok(())
+    }
+
+    fn read_jdbc_response(&mut self) -> std::io::Result<JdbcResponse> {
+        let mut retry_count = 0;
+        loop {
+            match self.try_read_jdbc_response() {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    if self.is_connection_error(&e) {
+                        retry_count += 1;
+                        if retry_count >= self.max_retries {
+                            return Err(e);
+                        }
+                        info!("Connection lost, attempting to reconnect (attempt {}/{})...",
+                              retry_count, self.max_retries);
+                        self.reconnect()?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn try_read_jdbc_response(&mut self) -> std::io::Result<JdbcResponse> {
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotConnected, "No active connection")
+        })?;
+
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf)?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+
+        let mut data_buf = vec![0u8; len];
+        stream.read_exact(&mut data_buf)?;
+
+        let response = JdbcResponse::decode(&*data_buf)?;
+        Ok(response)
+    }
+
+    fn reconnect(&mut self) -> std::io::Result<()> {
+        info!("Reconnecting to server {}:{}...", self.host, self.port);
+        self.stream = None;
+        self.connect()?;
+        self.authenticate()?;
+        info!("Successfully reconnected to server");
+        Ok(())
+    }
+
+    fn is_connection_error(&self, e: &std::io::Error) -> bool {
+        matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::NotConnected
+        )
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -38,11 +222,9 @@ struct Cli {
 }
 
 fn main() {
-    // 创建退出标志
     let should_exit = Arc::new(AtomicBool::new(false));
     let should_exit_clone = should_exit.clone();
 
-    // 设置Ctrl+C处理
     ctrlc::set_handler(move || {
         should_exit_clone.store(true, Ordering::SeqCst);
     })
@@ -50,83 +232,36 @@ fn main() {
 
     let cli = Cli::parse();
 
-    // 连接到JDBC服务器
     let addr = format!("{}:{}", cli.host, cli.port);
-    let socket_addr = addr.parse().expect("Invalid address format");
-    let mut stream = match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5)) {
-        Ok(stream) => {
-            // 设置读写超时
-            if let Err(e) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
-                error!("Failed to set read timeout: {}", e);
-                std::process::exit(1);
-            }
-            if let Err(e) = stream.set_write_timeout(Some(Duration::from_secs(5))) {
-                error!("Failed to set write timeout: {}", e);
-                std::process::exit(1);
-            }
 
-            // 禁用Nagle算法，减少延迟
-            stream.set_nodelay(true).unwrap();
+    let mut conn_manager = ConnectionManager::new(
+        cli.host.clone(),
+        cli.port,
+        cli.username.clone(),
+        cli.password.clone(),
+    );
 
-            stream
-        }
-        Err(e) => {
-            error!("Failed to connect to JDBC server at {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
-
-    // 初始化request_id计数器
-    let mut request_id = 1;
-
-    // 处理认证
-    let connection_request = ConnectionRequest {
-        username: cli.username.clone(),
-        password: cli.password.clone().unwrap_or_default(),
-        database: "default".to_string(),
-        fetch_size: 100,
-        auto_commit: true,
-    };
-
-    let jdbc_request = JdbcRequest {
-        request_id,
-        request: Some(jdbc_request::Request::Connection(connection_request)),
-    };
-
-    println!("Sending connection request...");
-    if let Err(e) = send_jdbc_request(&mut stream, &jdbc_request) {
-        error!("Failed to send connection request: {}", e);
+    info!("Connecting to JDBC server at {}...", addr);
+    if let Err(e) = conn_manager.connect() {
+        eprintln!("Failed to connect to JDBC server at {}: {}", addr, e);
         std::process::exit(1);
     }
 
-    println!("Reading connection response...");
-    match read_jdbc_response(&mut stream) {
-        Ok(response) => {
-            println!("Connection response received, status: {}", response.status);
-            if response.status != 0 {
-                // 0 是 Status::OK 的值
-                error!("Authentication failed: {}", response.error_message);
-                std::process::exit(1);
-            }
-        }
-        Err(e) => {
-            error!("Failed to read connection response: {}", e);
-            std::process::exit(1);
-        }
+    info!("Authenticating...");
+    if let Err(e) = conn_manager.authenticate() {
+        eprintln!("Authentication failed: {}", e);
+        std::process::exit(1);
     }
 
-    request_id += 1;
+    let mut request_id = 2;
 
-    // 跟踪当前选中的数据库
     let mut current_database: Option<String> = None;
 
-    // 如果提供了sql参数，执行单次命令并退出
     if let Some(sql) = cli.sql {
-        execute_sql(&mut stream, &sql, &mut request_id, &current_database);
+        execute_sql(&mut conn_manager, &sql, &mut request_id, &current_database);
         return;
     }
 
-    // 否则进入交互式模式
     println!("Connected to JDBC server at {}", addr);
     println!("Type 'exit' or 'quit' to exit");
     println!("Type 'help' for available commands");
@@ -136,7 +271,6 @@ fn main() {
     let mut reader = BufReader::new(stdin.lock());
 
     loop {
-        // 检查退出标志
         if should_exit.load(Ordering::SeqCst) {
             println!("\nReceived interrupt signal, exiting...");
             break;
@@ -150,7 +284,6 @@ fn main() {
 
         match result {
             Ok(0) => {
-                // EOF encountered, exit gracefully
                 println!("\nEOF encountered, exiting...");
                 break;
             }
@@ -170,32 +303,28 @@ fn main() {
                     continue;
                 }
 
-                // 处理use database命令
                 if command.starts_with("use database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        error!("Error: Invalid use database command. Use 'use database <database_name>'.");
+                        eprintln!("Error: Invalid use database command. Use 'use database <database_name>'.");
                         continue;
                     }
-                    
+
                     let database_name = parts[2];
                     current_database = Some(database_name.to_string());
                     println!("✓ Database changed to: {}", database_name);
                     continue;
                 }
 
-                // 处理close database命令，清除当前数据库上下文
                 if command.starts_with("close database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        error!("Error: Invalid close database command. Use 'close database <database_name>'.");
+                        eprintln!("Error: Invalid close database command. Use 'close database <database_name>'.");
                         continue;
                     }
-                    
+
                     let database_name = parts[2];
-                    // 执行close database命令
-                    execute_sql(&mut stream, original_line, &mut request_id, &current_database);
-                    // 如果关闭的是当前选中的数据库，清除数据库上下文
+                    execute_sql(&mut conn_manager, original_line, &mut request_id, &current_database);
                     if let Some(current_db) = &current_database {
                         if current_db == database_name {
                             current_database = None;
@@ -205,17 +334,15 @@ fn main() {
                     continue;
                 }
 
-                // 处理databases命令，列出所有数据库
                 if command == "databases" {
-                    execute_sql(&mut stream, "show databases", &mut request_id, &current_database);
+                    execute_sql(&mut conn_manager, "show databases", &mut request_id, &current_database);
                     continue;
                 }
 
-                // 处理source命令，用于执行文件中的SQL/DDL语句
                 if command.starts_with("source ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 2 {
-                        error!("Error: Invalid source command. Use 'source <file_path>'.");
+                        eprintln!("Error: Invalid source command. Use 'source <file_path>'.");
                         continue;
                     }
 
@@ -224,12 +351,10 @@ fn main() {
                         Ok(content) => {
                             println!("Executing commands from file: {}", file_path);
 
-                            // 按行处理文件内容
                             let mut current_statement = String::new();
                             for line in content.lines() {
                                 let trimmed_line = line.trim();
 
-                                // 跳过空行和注释行
                                 if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
                                     continue;
                                 }
@@ -237,105 +362,58 @@ fn main() {
                                 current_statement.push_str(trimmed_line);
                                 current_statement.push(' ');
 
-                                // 如果语句以分号结束，执行它
                                 if trimmed_line.ends_with(';') {
-                                    // 移除分号和多余空格
                                     let statement = current_statement.trim_end_matches(';').trim();
                                     if !statement.is_empty() {
-                                        // 执行单个语句
-                                        execute_sql(&mut stream, statement, &mut request_id, &current_database);
+                                        execute_sql(&mut conn_manager, statement, &mut request_id, &current_database);
                                     }
-                                    // 重置当前语句
                                     current_statement.clear();
                                 }
                             }
 
-                            // 执行最后一个没有分号的语句
                             let statement = current_statement.trim();
                             if !statement.is_empty() {
-                                execute_sql(&mut stream, statement, &mut request_id, &current_database);
+                                execute_sql(&mut conn_manager, statement, &mut request_id, &current_database);
                             }
 
                             println!("✓ Successfully executed commands from file: {}", file_path);
                         }
                         Err(err) => {
-                            error!("Error: Failed to read file {}: {:?}", file_path, err);
+                            eprintln!("Error: Failed to read file {}: {:?}", file_path, err);
                         }
                     }
                     continue;
                 }
 
-                execute_sql(&mut stream, original_line, &mut request_id, &current_database);
+                execute_sql(&mut conn_manager, original_line, &mut request_id, &current_database);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-                // 处理Ctrl+C信号，退出循环
                 println!("\nReceived interrupt signal, exiting...");
                 break;
             }
             Err(e) => {
-                error!("Error reading input: {}", e);
+                eprintln!("Error reading input: {}", e);
                 break;
             }
         }
     }
-
-    // 关闭连接 - 暂时简化，后续完善
-    // if let Err(e) = writeln!(stream, "CLOSE") {
-    //     error!("Failed to send close command: {}", e);
-    // } else if let Err(e) = stream.flush() {
-    //     error!("Failed to flush close command: {}", e);
-    // }
 }
 
-// 发送JDBC请求的辅助函数
-fn send_jdbc_request(stream: &mut TcpStream, request: &JdbcRequest) -> std::io::Result<()> {
-    // 序列化请求
-    let mut buf = Vec::with_capacity(request.encoded_len());
-    request.encode(&mut buf)?;
-
-    // 发送请求长度（4字节大端）
-    let len = buf.len() as u32;
-    stream.write_all(&len.to_be_bytes())?;
-
-    // 发送请求数据
-    stream.write_all(&buf)?;
-    stream.flush()?;
-
-    Ok(())
-}
-
-// 读取JDBC响应的辅助函数
-fn read_jdbc_response(stream: &mut TcpStream) -> std::io::Result<JdbcResponse> {
-    // 读取响应长度（4字节大端）
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    // 读取响应数据
-    let mut data_buf = vec![0u8; len];
-    stream.read_exact(&mut data_buf)?;
-
-    // 反序列化响应
-    let response = JdbcResponse::decode(&*data_buf)?;
-
-    Ok(response)
-}
-
-fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_database: &Option<String>) {
-    // 检查是否需要数据库上下文
+fn execute_sql(conn_manager: &mut ConnectionManager, sql: &str, request_id: &mut u64, current_database: &Option<String>) {
     let sql_lower = sql.trim().to_lowercase();
-    let needs_database = !sql_lower.starts_with("create database ") && 
+    let needs_database = !sql_lower.starts_with("create database ") &&
                          !sql_lower.starts_with("drop database ") &&
                          !sql_lower.starts_with("use database ") &&
-                         !sql_lower.starts_with("show databases");
-    
-    // 如果需要数据库上下文但未选择，则返回错误
+                         !sql_lower.starts_with("show databases") &&
+                         !sql_lower.starts_with("stat") &&
+                         !sql_lower.starts_with("healthcheck") &&
+                         !sql_lower.starts_with("flush");
+
     if needs_database && current_database.is_none() {
-        error!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
+        eprintln!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
         return;
     }
 
-    // 创建查询请求
     let query_request = QueryRequest {
         sql: sql.to_string(),
         parameters: Vec::new(),
@@ -343,30 +421,26 @@ fn execute_sql(stream: &mut TcpStream, sql: &str, request_id: &mut u64, current_
         use_cursor: false,
     };
 
-    // 创建JDBC请求
     let jdbc_request = JdbcRequest {
         request_id: *request_id,
         request: Some(jdbc_request::Request::Query(query_request)),
     };
 
-    // 发送请求
-    if let Err(e) = send_jdbc_request(stream, &jdbc_request) {
-        error!("Failed to send SQL command: {}", e);
+    if let Err(e) = conn_manager.send_jdbc_request(&jdbc_request) {
+        eprintln!("Failed to send SQL command: {}", e);
         return;
     }
 
-    // 读取响应
-    match read_jdbc_response(stream) {
+    match conn_manager.read_jdbc_response() {
         Ok(response) => {
             process_jdbc_response(&response);
         }
         Err(e) => {
-            error!("Failed to read SQL response: {}", e);
+            eprintln!("Failed to read SQL response: {}", e);
             return;
         }
     }
 
-    // 更新request_id
     *request_id += 1;
 }
 
@@ -376,10 +450,6 @@ fn process_jdbc_response(response: &JdbcResponse) {
         // 处理成功响应
         match &response.response {
             Some(jdbc_response::Response::ResultSet(result_set)) => {
-                // 处理结果集
-                println!("Debug: ResultSet columns: {:?}", result_set.columns);
-                println!("Debug: ResultSet rows: {:?}", result_set.rows);
-                println!("Debug: ResultSet row count: {}", result_set.row_count);
                 format_result_set_proto(result_set);
             }
             Some(jdbc_response::Response::Update(update)) => {
@@ -399,8 +469,7 @@ fn process_jdbc_response(response: &JdbcResponse) {
             }
         }
     } else {
-        // 处理错误响应
-        error!("Error: {}", response.error_message);
+        eprintln!("Error: {}", response.error_message);
     }
 }
 

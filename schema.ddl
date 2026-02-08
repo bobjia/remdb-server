@@ -57,8 +57,13 @@ insert into users (name, email, age, created_at) values ('bob13', 'a4', 4, 11111
 insert into users (name, email, age, created_at) values ('bob14', 'a5', 4, 111114);
 insert into users (name, email, age, created_at) values ('bob15', 'a6', 4, 111114);
 
--- CREATE TABLE products_vec (    id INT32 PRIMARY KEY,    name TEXT,    embedding VECTOR(4) WITH DISTANCE=IP);
--- CREATE INDEX idx_products_embedding ON products_vec (embedding) USING HNSW WITH (M=16, ef_construction=200);
--- INSERT INTO products_vec (id, name, embedding) VALUES         (1, 'product1', '[0.1, 0.2, 0.3, 0.4]'),        (2, 'product2', '[1.0, 0.9, 0.8, 0.7]');
+CREATE TABLE products_vec (    id INT32 PRIMARY KEY,    name TEXT,    embedding VECTOR(4) WITH DISTANCE=IP);
+CREATE INDEX idx_products_embedding ON products_vec (embedding) USING HNSW WITH (M=16, ef_construction=200);
+INSERT INTO products_vec (id, name, embedding) VALUES         (1, 'product1', '[0.1, 0.2, 0.3, 0.4]'),        (2, 'product2', '[1.0, 0.9, 0.8, 0.7]');
 
 CREATE TABLE datatype_test (id INTEGER PRIMARY KEY AUTO_INCREMENT, bool_col BOOLEAN NOT NULL DEFAULT TRUE, char_col CHAR(10), varchar_col VARCHAR(50), text_col TEXT, int_col INTEGER, real_col REAL, double_col DOUBLE, timestamp_col TIMESTAMP, timestamptz_col TIMESTAMPTZ(6), json_col JSON);
+
+INSERT INTO datatype_test (bool_col, char_col, varchar_col, text_col, int_col, real_col, double_col, timestamp_col, timestamptz_col, json_col) VALUES
+(TRUE, 'hello', 'varchar1', 'This is a text column', 100, 3.14, 2.71828, '2024-01-01 12:00:00', '2024-01-01 12:00:00+00', '{"name": "Alice", "age": 30, "active": true}'),
+(FALSE, 'world', 'varchar2', 'Another text value', 200, 6.28, 1.41421, '2024-02-01 13:30:00', '2024-02-01 13:30:00+00', '{"name": "Bob", "age": 25, "active": false, "tags": ["user", "admin"]}'),
+(TRUE, 'test', 'varchar3', 'Third text record', 300, 9.99, 3.14159, '2024-03-01 14:45:00', '2024-03-01 14:45:00+00', '{"product": "item1", "price": 19.99, "stock": 100}');
