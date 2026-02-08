@@ -112,9 +112,15 @@ impl WorkerThread {
             while !flag_clone.load(Ordering::SeqCst) {
                 // 从无锁队列获取请求
                 if let Some((request, response_tx)) = queue_clone.pop() {
-                    // 处理请求
+                    let mut db_guard = match db_clone.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            warn!("Mutex was poisoned, recovering data");
+                            poisoned.into_inner()
+                        }
+                    };
                     let response = JdbcProtocolHandler::process_single_request(
-                        &mut *db_clone.lock().unwrap(),
+                        &mut *db_guard,
                         request,
                         auth_enabled_clone,
                         &username_clone,
