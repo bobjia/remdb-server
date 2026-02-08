@@ -4,7 +4,7 @@
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTO_INCREMENT,
     name varchar(16) UNIQUE NOT NULL,
-    email char(32) NOT NULL,
+    email text NOT NULL,
     age INT default 20,
     created_at timestamptz(6)
 );
