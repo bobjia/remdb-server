@@ -252,6 +252,14 @@ struct WALConfig {
 
     /// 保留的检查点数量
     retained_checkpoints: Option<usize>,
+    /// 恢复时最大连续无效记录数，达到此值后停止恢复
+    max_consecutive_invalid: Option<u32>,
+    /// 恢复时跳过预分配空间的阈值（连续无效记录数）
+    skip_threshold: Option<u32>,
+    /// 恢复时跳过的块大小（字节）
+    skip_block_size: Option<usize>,
+    /// 恢复时最大跳过尝试次数
+    max_skip_attempts: Option<u32>,
 }
 
 /// 高可用配置
@@ -697,6 +705,10 @@ async fn main() {
     let wal_log_prealloc_size = config.wal.as_ref().and_then(|w| w.log_prealloc_size);
     let wal_log_segment_size = config.wal.as_ref().and_then(|w| w.log_segment_size);
     let wal_retained_checkpoints = config.wal.as_ref().and_then(|w| w.retained_checkpoints);
+    let wal_max_consecutive_invalid = config.wal.as_ref().and_then(|w| w.max_consecutive_invalid);
+    let wal_skip_threshold = config.wal.as_ref().and_then(|w| w.skip_threshold);
+    let wal_skip_block_size = config.wal.as_ref().and_then(|w| w.skip_block_size);
+    let wal_max_skip_attempts = config.wal.as_ref().and_then(|w| w.max_skip_attempts);
 
     let low_power_mode_supported = args
         .low_power_mode_supported
@@ -945,6 +957,10 @@ async fn main() {
             log_prealloc_size: wal_log_prealloc_size.unwrap_or(4 * 1024 * 1024),
             log_segment_size: wal_log_segment_size.unwrap_or(16 * 1024 * 1024),
             retained_checkpoints: wal_retained_checkpoints.unwrap_or(3),
+            max_consecutive_invalid: wal_max_consecutive_invalid.unwrap_or(100),
+            skip_threshold: wal_skip_threshold.unwrap_or(20),
+            skip_block_size: wal_skip_block_size.unwrap_or(4096),
+            max_skip_attempts: wal_max_skip_attempts.unwrap_or(10),
         },
         time_series_defaults: remdb::TimeSeriesConfig::DEFAULT, // 时序数据默认配置
         pubsub_config: None,                                    // PubSub配置，默认不使用

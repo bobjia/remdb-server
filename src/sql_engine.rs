@@ -1815,7 +1815,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                                         let str_val =
                                             default_str.trim_matches(|c| c == '\'' || c == '"');
                                         // JSON内联存储最大64字节
-                                        const INLINE_JSON_SIZE: usize = 64;
+                                        const INLINE_JSON_SIZE: usize = 256;
                                         let mut buf = [0; INLINE_JSON_SIZE];
                                         let len = core::cmp::min(
                                             str_val.len(),
@@ -1993,7 +1993,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
                         // 移除引号
                         let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
                         // JSON内联存储最大64字节
-                        const INLINE_JSON_SIZE: usize = 64;
+                        const INLINE_JSON_SIZE: usize = 256;
                         let mut buf = [0; INLINE_JSON_SIZE];
                         let len = core::cmp::min(str_val.len(), INLINE_JSON_SIZE);
                         buf[..len].copy_from_slice(str_val.as_bytes());

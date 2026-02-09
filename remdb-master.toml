@@ -41,6 +41,14 @@ log_prealloc_size = 4194304
 log_segment_size = 16777216
 # 保留的检查点数量，默认3
 retained_checkpoints = 3
+# 恢复时最大连续无效记录数，达到此值后停止恢复，默认100
+max_consecutive_invalid = 100
+# 恢复时跳过预分配空间的阈值（连续无效记录数），默认20
+skip_threshold = 20
+# 恢复时跳过的块大小（字节），默认4096（4KB）
+skip_block_size = 4096
+# 恢复时最大跳过尝试次数，默认10
+max_skip_attempts = 10
 
 # JDBC服务配置
 # 是否启用JDBC服务
