@@ -58,7 +58,7 @@ public class TestBase {
             statement.executeUpdate("CREATE DATABASE IF NOT EXISTS " + TEST_DATABASE);
         } catch (SQLException e) {
             // 忽略数据库已存在的错误
-            if (!e.getMessage().contains("already exists")) {
+            if (!e.getMessage().contains("DatabaseExists") && !e.getMessage().contains("already exists")) {
                 throw e;
             }
         }
@@ -69,7 +69,8 @@ public class TestBase {
      * @throws SQLException 如果切换失败
      */
     protected void useTestDatabase() throws SQLException {
-        statement.executeUpdate("USE DATABASE " + TEST_DATABASE);
+        // 数据库已在连接URL中指定，不需要再执行USE DATABASE
+        // statement.executeUpdate("USE DATABASE " + TEST_DATABASE);
     }
 
     /**

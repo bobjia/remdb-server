@@ -10,8 +10,8 @@ snapshot_type = "incremental"
 # 快照周期（秒）
 snapshot_interval = 60
 
-# 数据库总内存大小（字节），默认1GB，增加到4GB以解决内存不足问题（特别是向量表）
-total_memory = 4294967296
+# 数据库总内存大小（字节），默认1GB，设置为100MB以避免内存分配错误
+total_memory = 104857600
 
 # 是否支持低功耗模式，默认true
 low_power_mode_supported = true
