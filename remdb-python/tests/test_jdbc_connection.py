@@ -58,10 +58,7 @@ def test_jdbc_connection():
         # Try to receive a response
         # First read length prefix (4 bytes)
         length_prefix = s.recv(4)
-        if len(length_prefix) != 4:
-            print(f"✗ Failed to read response length: {len(length_prefix)} bytes received")
-            s.close()
-            return False
+        assert len(length_prefix) == 4, f"Failed to read response length: {len(length_prefix)} bytes received"
         
         # Unpack length
         length = struct.unpack('>I', length_prefix)[0]
@@ -71,10 +68,7 @@ def test_jdbc_connection():
         serialized = b''
         while len(serialized) < length:
             chunk = s.recv(length - len(serialized))
-            if not chunk:
-                print("✗ Connection closed while reading response")
-                s.close()
-                return False
+            assert chunk, "Connection closed while reading response"
             serialized += chunk
         
         print(f"✓ Received serialized response: {len(serialized)} bytes")
@@ -96,16 +90,15 @@ def test_jdbc_connection():
             print(f"✗ Connection failed: {response.error_message}")
         
         s.close()
-        return True
     except socket.error as e:
         print(f"✗ Socket error: {e}")
         s.close()
-        return False
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
         s.close()
-        return False
+        raise
 
 if __name__ == "__main__":
     test_jdbc_connection()
