@@ -119,6 +119,12 @@ class RemDbConnection:
                 self.jdbc_client.disconnect()
             except Exception:
                 pass
+        elif not self.is_network_connection and hasattr(self, 'db') and self.db:
+            try:
+                if hasattr(self.db, 'close'):
+                    self.db.close()
+            except Exception:
+                pass
         self.connected = False
 
     def get_table(self, table_name: str) -> "RemDbTable":
@@ -319,10 +325,7 @@ class RemDbTable:
                 # 对于本地连接，将字典中的值转换为适当的类型
                 str_record = {}
                 for k, v in record.items():
-                    if isinstance(v, JsonValue):
-                        # JsonValue实例，转换为带类型提示的JSON字符串
-                        str_record[k] = "__JSON__:" + str(v)
-                    elif isinstance(v, (dict, list)):
+                    if isinstance(v, (dict, list)):
                         # 对于JSON类型，转换为JSON字符串
                         import json
                         str_record[k] = json.dumps(v)
@@ -338,10 +341,7 @@ class RemDbTable:
                 # 对于本地连接，将列表中的值转换为字符串
                 str_record = []
                 for item in record:
-                    if isinstance(item, JsonValue):
-                        # JsonValue实例，转换为带类型提示的JSON字符串
-                        str_record.append("__JSON__:" + str(item))
-                    elif isinstance(item, (dict, list)):
+                    if isinstance(item, (dict, list)):
                         # 对于JSON类型，转换为JSON字符串
                         import json
                         str_record.append(json.dumps(item))

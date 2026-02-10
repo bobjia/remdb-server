@@ -32,7 +32,8 @@ class TestGetByIdMethod(unittest.TestCase):
             
             # 插入测试数据
             test_data = {"id": 1, "name": "Test Item", "value": 23.5}
-            table.insert(test_data)
+            insert_success = table.insert(test_data)
+            self.assertTrue(insert_success, "Insert should succeed")
             
             # 使用get_by_id获取数据
             result = table.get_by_id(1)
