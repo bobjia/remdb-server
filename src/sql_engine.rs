@@ -2104,6 +2104,54 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     // 转换 primary_key_index 为 Option<Vec<usize>> 类型，以支持复合主键
     let primary_key_vec = primary_key_index.map(|index| vec![index]);
     
+    // 解析 WITH CONFIGURATION 子句中的 max_records 参数
+    let mut max_records: Option<usize> = None;
+    let sql_lower = sql.to_lowercase();
+    if let Some(config_pos) = sql_lower.find("with configuration (") {
+        // 提取 CONFIGURATION 括号内的内容
+        let config_start = config_pos + "with configuration (".len();
+        if let Some(config_end) = sql[config_start..].find(')') {
+            let config_content = &sql[config_start..config_start + config_end].trim();
+            let mut in_quotes = false;
+            let mut current_param = String::new();
+            
+            for c in config_content.chars() {
+                match c {
+                    '"' | '\'' => in_quotes = !in_quotes,
+                    ',' if !in_quotes => {
+                        // 处理一个参数
+                        let param = current_param.trim();
+                        if let Some((key, value)) = param.split_once('=') {
+                            let key = key.trim().to_lowercase();
+                            let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+                            if key == "max_records" {
+                                if let Ok(val) = value.parse::<usize>() {
+                                    max_records = Some(val);
+                                }
+                            }
+                        }
+                        current_param.clear();
+                    }
+                    _ => {
+                        current_param.push(c);
+                    }
+                }
+            }
+            
+            // 处理最后一个参数
+            let param = current_param.trim();
+            if let Some((key, value)) = param.split_once('=') {
+                let key = key.trim().to_lowercase();
+                let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+                if key == "max_records" {
+                    if let Ok(val) = value.parse::<usize>() {
+                        max_records = Some(val);
+                    }
+                }
+            }
+        }
+    }
+    
     // 调用 DdlExecutor::create_table 方法创建表，传递约束信息
     remdb::DdlExecutor::create_table(
         db,
@@ -2111,6 +2159,7 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
         &converted_fields,
         Some(&constraints),
         primary_key_vec,
+        max_records,
     )?;
 
     // 构造结果集

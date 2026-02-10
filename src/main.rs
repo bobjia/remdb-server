@@ -961,6 +961,8 @@ async fn main() {
             skip_threshold: wal_skip_threshold.unwrap_or(20),
             skip_block_size: wal_skip_block_size.unwrap_or(4096),
             max_skip_attempts: wal_max_skip_attempts.unwrap_or(10),
+            compression_type: remdb::config::WALCompressionType::None,
+            compression_level: 1,
         },
         time_series_defaults: remdb::TimeSeriesConfig::DEFAULT, // 时序数据默认配置
         pubsub_config: None,                                    // PubSub配置，默认不使用

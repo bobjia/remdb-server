@@ -390,10 +390,6 @@ public:
             return py::array_t<double>(values.size(), values.data());
         }
         
-        if (result_set) {
-            remdb_free_result_set(result_set);
-        }
-        
         std::vector<double> values;
         return py::array_t<double>(values.size(), values.data());
     }
@@ -443,10 +439,6 @@ public:
                 }
             }
             
-            remdb_free_result_set(result_set);
-        }
-        
-        if (result_set) {
             remdb_free_result_set(result_set);
         }
         
