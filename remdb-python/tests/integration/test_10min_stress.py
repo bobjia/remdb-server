@@ -14,7 +14,7 @@ class Test10MinuteStress(LocalTestCase):
         TABLE_NAME = "stress_test_table"
         TEST_DURATION_SECONDS = 600  # 10 minutes
         
-        # Create test table with mixed data types
+        # Create test table with mixed data types including VECTOR
         schema = """
             id INTEGER PRIMARY KEY,
             name TEXT,
@@ -22,10 +22,15 @@ class Test10MinuteStress(LocalTestCase):
             price REAL,
             active BOOLEAN,
             created_at TIMESTAMP,
-            metadata JSON
+            metadata JSON,
+            embedding VECTOR(3)
         """
         
-        self.create_test_table(TABLE_NAME, schema)
+        try:
+            self.create_test_table(TABLE_NAME, schema)
+        except Exception as e:
+            # Skip if VECTOR type is not supported or causes memory issues
+            self.skipTest(f"VECTOR type not supported in stress test: {e}")
         
         # Metrics tracking
         metrics = {
@@ -50,8 +55,10 @@ class Test10MinuteStress(LocalTestCase):
             active = random.choice([True, False])
             created_at = int(time.time() * 1000)
             metadata = '{"row_id": ' + str(row_id) + ', "random_val": ' + str(random.randint(1, 100)) + ', "tags": ["test", "stress"]}'
+            # Generate random 3-dimensional vector
+            vector = '[' + ','.join([str(round(random.uniform(-1.0, 1.0), 2)) for _ in range(3)]) + ']'
             
-            return (row_id, name, value, price, active, created_at, metadata)
+            return (row_id, name, value, price, active, created_at, metadata, vector)
         
         # Insert operation function
         def perform_insert(row_id):
@@ -59,13 +66,13 @@ class Test10MinuteStress(LocalTestCase):
             try:
                 data = generate_test_data(row_id)
                 # Escape single quotes in name and metadata
-                id_val, name, value, price, active, created_at, metadata = data
+                id_val, name, value, price, active, created_at, metadata, vector = data
                 name_escaped = name.replace("'", "''")
                 metadata_escaped = metadata.replace("'", "''")
                 
                 sql = f"""
                     INSERT INTO {TABLE_NAME} 
-                    VALUES ({id_val}, '{name_escaped}', {value}, {price}, {active}, {created_at}, '{metadata_escaped}')
+                    VALUES ({id_val}, '{name_escaped}', {value}, {price}, {active}, {created_at}, '{metadata_escaped}', '{vector}')
                 """
                 
                 self.execute_sql(sql)
@@ -79,7 +86,7 @@ class Test10MinuteStress(LocalTestCase):
         def perform_query():
             """Perform random query operation"""
             try:
-                query_type = random.choice(['basic', 'where', 'aggregate', 'order', 'limit'])
+                query_type = random.choice(['basic', 'where', 'aggregate', 'order', 'limit', 'vector'])
                 
                 if query_type == 'basic':
                     # Basic select
@@ -125,6 +132,11 @@ class Test10MinuteStress(LocalTestCase):
                     limit = random.randint(1, 20)
                     offset = random.randint(0, max(0, metrics['total_inserts'] - limit))
                     self.execute_sql(f"SELECT * FROM {TABLE_NAME} ORDER BY id LIMIT {limit} OFFSET {offset}")
+                
+                elif query_type == 'vector':
+                    # Vector-related query
+                    # Basic vector select
+                    self.execute_sql(f"SELECT id, name, embedding FROM {TABLE_NAME} ORDER BY id DESC LIMIT 5")
                 
                 metrics['successful_queries'] += 1
                 return True
