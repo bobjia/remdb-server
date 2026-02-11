@@ -1,5 +1,5 @@
 use remdb::{RemDb, RemDbError, Result as RemResult, TableDef};
-use remdb::log::{info, warn};
+use remdb::log::{info, error, warn};
 use remdb::platform;
 use std::fs;
 use std::path::Path;
@@ -759,14 +759,32 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
     // If there are WAL files to replay, try using LogManager for replay
     if !wal_files_to_replay.is_empty() {
         info!("Attempting to replay WAL files...");
-
-        // Try using LogManager for WAL replay
+        
+        // Validate WAL files before replay
+        let mut valid_wal_files = Vec::new();
+        for (path, seq) in &wal_files_to_replay {
+            if let Ok(metadata) = std::fs::metadata(path) {
+                if metadata.len() > 0 {
+                    info!("Validating WAL file: {} (size: {} bytes)", path, metadata.len());
+                    valid_wal_files.push((path.clone(), *seq));
+                } else {
+                    warn!("Skipping empty WAL file: {}", path);
+                }
+            } else {
+                warn!("Failed to read WAL file metadata: {}, skipping", path);
+            }
+        }
+        
+        if valid_wal_files.is_empty() {
+            warn!("No valid WAL files found, skipping WAL replay");
+            return Ok(());
+        }
+        
+        // Try using LogManager for WAL replay with validated files
         unsafe {
             if let Some(log_manager) = remdb::transaction::get_log_manager() {
                 info!("LogManager found, attempting recovery...");
-
-                // Debug info: LogManager found and ready for recovery
-
+                
                 // Try recovery with more detailed error handling
                 match log_manager.recover(db) {
                     Ok(_) => {
@@ -775,13 +793,14 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
                         // 因为表可能是从DDL文件创建的，不是从WAL恢复的
                     }
                     Err(err) => {
-                        warn!("Warning: WAL recovery failed with error: {:?}", err);
-                        warn!("  This might be due to:");
-                        warn!("  - WAL file format mismatch");
-                        warn!("  - File permission issues");
-                        warn!("  - Corrupt WAL file");
-                        warn!("  - LogManager configuration issues");
-                        warn!("  - Using fallback recovery approach");
+                        error!("Critical: WAL recovery failed with error: {:?}", err);
+                        error!("This may indicate data corruption or incomplete transactions");
+                        error!("Please check WAL files in directory: {}", wal_dir);
+                        
+                        // Try to continue with partial recovery
+                        warn!("Attempting to continue with partial data recovery...");
+                        
+                        // Return RemDbError directly
                         return Err(err);
                     }
                 }

@@ -1,4 +1,5 @@
 use crate::ddl_compiler::DdlError;
+use crate::handler::safe_database_ops::{SafeDatabaseOperations, DatabaseError};
 use remdb::{DdlExecutor, RemDb, RemDbError, MAX_STRING_LEN, MAX_TEXT_LEN, json::JsonDocument};
 use remdb::log::{info, error};
 use thiserror::Error;
@@ -237,50 +238,54 @@ fn execute_original_sql(db: &mut RemDb, sql: &str) -> std::result::Result<Result
 
     // 处理ROLLBACK命令
     if sql_lower == "rollback" {
-        // 调用数据库的rollback_transaction方法
-        unsafe {
-            db.rollback_transaction()?;
+        match SafeDatabaseOperations::rollback_transaction(db) {
+            Ok(_) => {
+                return Ok(ResultSet {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    affected_rows: 0,
+                });
+            }
+            Err(err) => {
+                return Err(SqlError::Parsing(format!("Rollback error: {}", err)));
+            }
         }
-        // 返回成功结果
-        return Ok(ResultSet {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            affected_rows: 0,
-        });
     }
 
     // 处理FLUSH命令
     if sql_lower == "flush" {
-        // 调用数据库的flush_logs方法，将WAL日志刷新到磁盘
-        unsafe {
-            db.flush_logs()?;
+        match SafeDatabaseOperations::flush_logs(db) {
+            Ok(_) => {
+                return Ok(ResultSet {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    affected_rows: 0,
+                });
+            }
+            Err(err) => {
+                return Err(SqlError::Parsing(format!("Flush logs error: {}", err)));
+            }
         }
-        // 返回成功结果
-        return Ok(ResultSet {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            affected_rows: 0,
-        });
     }
 
     // 处理BEGIN命令
     if sql_lower == "begin" || sql_lower == "begin transaction" {
-        // 调用数据库的begin_transaction方法，使用空指针和0表示JDBC环境
-        unsafe {
-            db.begin_transaction(
-                remdb::transaction::TransactionType::ReadWrite,
-                remdb::transaction::IsolationLevel::ReadCommitted,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-            )?;
+        match SafeDatabaseOperations::begin_transaction(
+            db,
+            remdb::transaction::TransactionType::ReadWrite,
+            remdb::transaction::IsolationLevel::ReadCommitted,
+        ) {
+            Ok(_) => {
+                return Ok(ResultSet {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    affected_rows: 0,
+                });
+            }
+            Err(err) => {
+                return Err(SqlError::Parsing(format!("Begin transaction error: {}", err)));
+            }
         }
-        // 返回成功结果
-        return Ok(ResultSet {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            affected_rows: 0,
-        });
     }
 
     // 处理CREATE DATABASE命令

@@ -1,4 +1,5 @@
 use crate::handler::JdbcProtocolHandler;
+use crate::handler::health_monitor::{ServerHealthMonitor, HealthStatus};
 use crate::pool::HighPerfConnectionPool;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
 use crate::tuning::SystemTuner;
@@ -28,6 +29,8 @@ pub struct JdbcServer {
     connection_pool: Arc<HighPerfConnectionPool>,
     /// 系统调优器
     system_tuner: Arc<SystemTuner>,
+    /// 健康监控器
+    health_monitor: Arc<ServerHealthMonitor>,
 }
 
 impl JdbcServer {
@@ -54,6 +57,7 @@ impl JdbcServer {
         ));
         let connection_pool = Arc::new(HighPerfConnectionPool::new(max_connections));
         let system_tuner = Arc::new(SystemTuner::new());
+        let health_monitor = Arc::new(ServerHealthMonitor::new(5));
 
         Self {
             db,
@@ -66,6 +70,7 @@ impl JdbcServer {
             protocol_handler,
             connection_pool,
             system_tuner,
+            health_monitor,
         }
     }
 
@@ -98,6 +103,7 @@ impl JdbcServer {
                             // 获取信号量许可
                             let permit = semaphore.clone().acquire_owned().await.unwrap();
                             let handler = self.protocol_handler.clone();
+                            let health_monitor = self.health_monitor.clone();
 
                             // 处理连接
                             tokio::spawn(async move {
@@ -105,8 +111,14 @@ impl JdbcServer {
                                 let _permit = permit;
 
                                 // 使用高性能协议处理器处理连接
-                                if let Err(e) = handler.handle_connection(socket).await {
-                                    error!("JDBC connection error: {:?}", e);
+                                match handler.handle_connection(socket).await {
+                                    Ok(_) => {
+                                        health_monitor.record_success();
+                                    }
+                                    Err(e) => {
+                                        error!("JDBC connection error: {:?}", e);
+                                        health_monitor.record_error();
+                                    }
                                 }
 
                                 info!("JDBC connection closed: {}", addr);
@@ -114,6 +126,7 @@ impl JdbcServer {
                         }
                         Err(e) => {
                             error!("Accept error: {}", e);
+                            self.health_monitor.record_error();
                         }
                     }
                 }
@@ -129,6 +142,16 @@ impl JdbcServer {
     /// 获取连接池统计信息
     pub fn get_pool_stats(&self) -> crate::pool::PoolStatsSnapshot {
         self.connection_pool.get_stats()
+    }
+
+    /// 获取系统健康状态
+    pub fn get_health_status(&self) -> crate::handler::health_monitor::HealthStatus {
+        self.health_monitor.get_status()
+    }
+
+    /// 获取错误计数
+    pub fn get_error_count(&self) -> u64 {
+        self.health_monitor.get_error_count()
     }
 
     /// 验证用户名和密码

@@ -1,1 +1,0 @@
-java -cp ".;target/classes;lib/*" SimpleTest

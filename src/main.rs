@@ -18,8 +18,12 @@ mod macros;
 mod benchmark;
 mod cli;
 mod ddl_compiler;
+mod handler;
+mod pool;
+mod proto;
 mod snapshot_loader;
 mod sql_engine;
+mod tuning;
 
 // 定义Windows平台实现，用于非POSIX平台
 struct WindowsPlatform;

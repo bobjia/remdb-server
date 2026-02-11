@@ -237,23 +237,21 @@ impl<'a> PoolGuard<'a> {
     }
 
     /// 获取连接引用
-    pub fn get_connection(&self) -> &ConnectionHandle {
-        &self.conn.as_ref().unwrap().connection
+    pub fn get_connection(&self) -> Option<&ConnectionHandle> {
+        self.conn.as_ref().map(|conn| &conn.connection)
     }
 
     /// 获取可变连接引用
-    pub fn get_connection_mut(&mut self) -> &mut ConnectionHandle {
-        &mut self.conn.as_mut().unwrap().connection
+    pub fn get_connection_mut(&mut self) -> Option<&mut ConnectionHandle> {
+        self.conn.as_mut().map(|conn| &mut conn.connection)
     }
 
     /// 获取零拷贝缓冲区
-    pub fn get_zero_copy_buffer(&mut self) -> &mut ZeroCopyBuffer {
+    pub fn get_zero_copy_buffer(&mut self) -> Option<&mut ZeroCopyBuffer> {
         self.conn
             .as_mut()
-            .unwrap()
-            .zero_copy_buffer
-            .as_mut()
-            .unwrap()
+            .and_then(|conn| conn.zero_copy_buffer.as_mut())
+            .map(|buf| &mut *buf)
     }
 }
 

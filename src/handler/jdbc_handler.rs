@@ -1,5 +1,6 @@
 use crate::proto::*;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
+use crate::handler::safe_database_ops::SafeDatabaseOperations;
 use bytes::Bytes;
 use crossbeam::queue::SegQueue;
 use hex;
@@ -115,8 +116,21 @@ impl WorkerThread {
                     let mut db_guard = match db_clone.lock() {
                         Ok(guard) => guard,
                         Err(poisoned) => {
-                            warn!("Mutex was poisoned, recovering data");
-                            poisoned.into_inner()
+                            error!("Mutex was poisoned, this indicates a thread panic while holding the lock");
+                            error!("This is a critical error that requires server restart");
+                            
+                            let error_response = JdbcResponse {
+                                request_id: request.request_id,
+                                status: Status::ServerError.into(),
+                                error_message: "Database is in inconsistent state due to internal error. Please restart the server.".to_string(),
+                                response: None,
+                            };
+                            
+                            let tx: tokio::sync::mpsc::UnboundedSender<JdbcResponse> = response_tx;
+                            if tx.send(error_response).is_err() {
+                                error!("Failed to send error response: channel closed");
+                            }
+                            continue;
                         }
                     };
                     let response = JdbcProtocolHandler::process_single_request(
@@ -126,7 +140,6 @@ impl WorkerThread {
                         &username_clone,
                         &password_hash_clone,
                     );
-                    // 发送响应
                     if response_tx.send(response).is_err() {
                         warn!("Failed to send response: channel closed");
                     }
@@ -205,8 +218,8 @@ impl JdbcProtocolHandler {
         tokio::spawn(async move {
             let mut rx = response_rx;
             while let Some(response) = rx.recv().await {
-                let mut buf = Vec::new();
-                if let Err(e) = response.encode(&mut buf) {
+                let mut buf: Vec<u8> = Vec::new();
+                if let Err(e) = prost::Message::encode(&response, &mut buf) {
                     error!("Failed to encode response: {:?}", e);
                     break;
                 }
@@ -294,7 +307,7 @@ impl JdbcProtocolHandler {
 
     /// 处理单个请求
     fn process_single_request(
-        db: &mut RemDb, 
+        db: &mut RemDb,
         request: JdbcRequest, 
         auth_enabled: bool,
         expected_username: &str,
@@ -378,57 +391,45 @@ impl JdbcProtocolHandler {
                     _ => remdb::transaction::IsolationLevel::ReadCommitted,
                 };
 
-                unsafe {
-                    match db.begin_transaction(
-                        tx_type,
-                        isolation_level,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                    ) {
-                        Ok(_) => {
-                            let tx_response = TransactionResponse {
-                                transaction_id: 0, // TODO: 实现事务ID生成
-                            };
-                            response.response =
-                                Some(jdbc_response::Response::Transaction(tx_response));
-                        }
-                        Err(err) => {
-                            response.status = Status::Error.into();
-                            response.error_message = format!("{:?}", err);
-                        }
+                match SafeDatabaseOperations::begin_transaction(db, tx_type, isolation_level) {
+                    Ok(_) => {
+                        let tx_response = TransactionResponse {
+                            transaction_id: 0, // TODO: 实现事务ID生成
+                        };
+                        response.response =
+                            Some(jdbc_response::Response::Transaction(tx_response));
+                    }
+                    Err(err) => {
+                        response.status = Status::Error.into();
+                        response.error_message = format!("{}", err);
                     }
                 }
             }
             Some(jdbc_request::Request::CommitTransaction(_)) => {
                 // 提交事务
-                unsafe {
-                    match db.commit_transaction() {
-                        Ok(_) => {
-                            let tx_response = TransactionResponse { transaction_id: 0 };
-                            response.response =
-                                Some(jdbc_response::Response::Transaction(tx_response));
-                        }
-                        Err(err) => {
-                            response.status = Status::Error.into();
-                            response.error_message = format!("{:?}", err);
-                        }
+                match SafeDatabaseOperations::commit_transaction(db) {
+                    Ok(_) => {
+                        let tx_response = TransactionResponse { transaction_id: 0 };
+                        response.response =
+                            Some(jdbc_response::Response::Transaction(tx_response));
+                    }
+                    Err(err) => {
+                        response.status = Status::Error.into();
+                        response.error_message = format!("{}", err);
                     }
                 }
             }
             Some(jdbc_request::Request::RollbackTransaction(_)) => {
                 // 回滚事务
-                unsafe {
-                    match db.rollback_transaction() {
-                        Ok(_) => {
-                            let tx_response = TransactionResponse { transaction_id: 0 };
-                            response.response =
-                                Some(jdbc_response::Response::Transaction(tx_response));
-                        }
-                        Err(err) => {
-                            response.status = Status::Error.into();
-                            response.error_message = format!("{:?}", err);
-                        }
+                match SafeDatabaseOperations::rollback_transaction(db) {
+                    Ok(_) => {
+                        let tx_response = TransactionResponse { transaction_id: 0 };
+                        response.response =
+                            Some(jdbc_response::Response::Transaction(tx_response));
+                    }
+                    Err(err) => {
+                        response.status = Status::Error.into();
+                        response.error_message = format!("{}", err);
                     }
                 }
             }
@@ -552,9 +553,24 @@ impl JdbcProtocolHandler {
 
     /// 批量请求处理
     pub async fn handle_batch(&self, batch: Vec<JdbcRequest>) -> Vec<JdbcResponse> {
-        // 串行处理请求，避免并行带来的锁问题
         let mut responses = Vec::with_capacity(batch.len());
-        let mut db_lock = self.db.lock().unwrap();
+        
+        let mut db_lock = match self.db.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                error!("Mutex was poisoned during batch processing, this indicates a thread panic while holding the lock");
+                error!("This is a critical error that requires server restart");
+                
+                return batch.iter().map(|req| {
+                    JdbcResponse {
+                        request_id: req.request_id,
+                        status: Status::ServerError.into(),
+                        error_message: "Database is in inconsistent state due to internal error. Please restart of server.".to_string(),
+                        response: None,
+                    }
+                }).collect();
+            }
+        };
         
         let auth_enabled = self.auth_enabled;
         let username = self.username.clone();
@@ -562,7 +578,7 @@ impl JdbcProtocolHandler {
 
         for req in batch {
             responses.push(JdbcProtocolHandler::process_single_request(
-                &mut *db_lock,
+                *db_lock,
                 req,
                 auth_enabled,
                 &username,
