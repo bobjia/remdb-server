@@ -560,15 +560,10 @@ public class RemDbStatement implements Statement {
             if (parts.length > 4) {
                 String rowsPart = parts[4];
                 if (!rowsPart.isEmpty()) {
-                    String[] rowStrings = rowsPart.split(";");
+                    String[] rowStrings = rowsPart.split(";\\s*");
                     for (String rowString : rowStrings) {
                         if (!rowString.isEmpty()) {
-                            List<String> row = new ArrayList<>();
-                            String[] values = rowString.split(",");
-                            // 确保只添加与列名数量匹配的行数据
-                            for (int i = 0; i < Math.min(values.length, columnNames.length); i++) {
-                                row.add(values[i]);
-                            }
+                            List<String> row = parseRowValues(rowString, columnCount);
                             // 只有当行数据的列数与列名的数量匹配时，才添加到 rows 列表中
                             if (row.size() == columnNames.length) {
                                 rows.add(row);
@@ -580,6 +575,51 @@ public class RemDbStatement implements Statement {
         }
 
         return new RemDbResultSet(columns, rows);
+    }
+    
+    /**
+     * 解析行数据，正确处理向量中的逗号和末尾的空值
+     * @param rowString 行数据字符串
+     * @param expectedColumns 期望的列数
+     * @return 解析后的值列表
+     */
+    private List<String> parseRowValues(String rowString, int expectedColumns) {
+        List<String> values = new ArrayList<>();
+        StringBuilder currentValue = new StringBuilder();
+        boolean inVector = false;
+        int vectorDepth = 0;
+        
+        for (int i = 0; i < rowString.length(); i++) {
+            char c = rowString.charAt(i);
+            
+            if (c == '[') {
+                inVector = true;
+                vectorDepth++;
+                currentValue.append(c);
+            } else if (c == ']') {
+                vectorDepth--;
+                if (vectorDepth == 0) {
+                    inVector = false;
+                }
+                currentValue.append(c);
+            } else if (c == ',' && !inVector) {
+                // 遇到逗号且不在向量中，说明是值的分隔符
+                values.add(currentValue.toString());
+                currentValue.setLength(0);
+            } else {
+                currentValue.append(c);
+            }
+        }
+        
+        // 添加最后一个值
+        values.add(currentValue.toString());
+        
+        // 确保值的数量与期望的列数匹配，不足的用空字符串补充
+        while (values.size() < expectedColumns) {
+            values.add("");
+        }
+        
+        return values;
     }
 
     private int parseUpdateCount(String response) throws SQLException {

@@ -93,7 +93,16 @@ public class TestBase {
             "test_drop_if_exists",
             "test_timeseries_table",
             "test_constraints",
-            "test_composite_pk"
+            "test_composite_pk",
+            "test_integer",
+            "test_real",
+            "test_text",
+            "test_boolean",
+            "test_timestamp",
+            "test_vector",
+            "test_utf8",
+            "test_conversion",
+            "test_all_types"
         };
 
         for (String table : testTables) {

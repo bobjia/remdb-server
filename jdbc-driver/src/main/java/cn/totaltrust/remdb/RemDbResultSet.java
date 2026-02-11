@@ -62,7 +62,16 @@ public class RemDbResultSet implements ResultSet {
         checkClosed();
         checkRowIndex();
         checkColumnIndex(columnIndex);
-        return rows.get(currentRowIndex).get(columnIndex - 1);
+        String value = rows.get(currentRowIndex).get(columnIndex - 1);
+        
+        // Fix UTF-8 double encoding issue
+        try {
+            byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            // If conversion fails, return the original value
+            return value;
+        }
     }
 
     @Override

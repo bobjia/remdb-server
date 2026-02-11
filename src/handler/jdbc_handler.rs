@@ -297,6 +297,8 @@ impl JdbcProtocolHandler {
                 self.metrics.record_request();
             } else {
                 error!("Failed to decode JDBC request");
+                // 如果解码失败，可能是因为客户端关闭了连接，直接退出循环
+                break;
             }
         }
 

@@ -906,7 +906,7 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                                 if i > 0 {
                                                     vec_str.push_str(", ");
                                                 }
-                                                let val = *vector_ptr.add(i);
+                                                let val = core::ptr::read_unaligned(vector_ptr.add(i));
                                                 vec_str.push_str(&format!("{:.4}", val));
                                             }
                                             
@@ -919,14 +919,14 @@ fn execute_select(db: &mut RemDb, sql: &str) -> std::result::Result<ResultSet, S
                                                     if i > dimension - 3 {
                                                         vec_str.push_str(", ");
                                                     }
-                                                    let val = *vector_ptr.add(i);
+                                                    let val = core::ptr::read_unaligned(vector_ptr.add(i));
                                                     vec_str.push_str(&format!("{:.4}", val));
                                                 }
                                             } else if dimension > 3 {
                                                 // 显示中间的元素
                                                 for i in 3..dimension {
                                                     vec_str.push_str(", ");
-                                                    let val = *vector_ptr.add(i);
+                                                    let val = core::ptr::read_unaligned(vector_ptr.add(i));
                                                     vec_str.push_str(&format!("{:.4}", val));
                                                 }
                                             }

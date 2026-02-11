@@ -24,7 +24,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testIntegerType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_integer (id INTEGER PRIMARY KEY, value INTEGER)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_integer (id INTEGER PRIMARY KEY AUTOINCREMENT, value INTEGER)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_integer (value) VALUES (100)");
@@ -49,7 +49,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testRealType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_real (id INTEGER PRIMARY KEY, value REAL)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_real (id INTEGER PRIMARY KEY AUTOINCREMENT, value REAL)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_real (value) VALUES (100.5)");
@@ -74,7 +74,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testTextType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_text (id INTEGER PRIMARY KEY, value TEXT)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_text (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_text (value) VALUES ('Hello')");
@@ -99,7 +99,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testBooleanType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_boolean (id INTEGER PRIMARY KEY, value BOOLEAN)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_boolean (id INTEGER PRIMARY KEY AUTOINCREMENT, value BOOLEAN)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_boolean (value) VALUES (true)");
@@ -123,7 +123,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testTimestampType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_timestamp (id INTEGER PRIMARY KEY, value TIMESTAMP)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_timestamp (id INTEGER PRIMARY KEY AUTOINCREMENT, value TIMESTAMP)");
 
         // 插入测试数据
         long now = System.currentTimeMillis();
@@ -147,7 +147,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testVectorType() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_vector (id INTEGER PRIMARY KEY, value VECTOR(3) WITH DISTANCE=L2)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_vector (id INTEGER PRIMARY KEY AUTOINCREMENT, value VECTOR(3) WITH DISTANCE=L2)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_vector (value) VALUES ([1.0, 2.0, 3.0])");
@@ -172,7 +172,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testUtf8Support() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_utf8 (id INTEGER PRIMARY KEY, value TEXT)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_utf8 (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)");
 
         // 插入包含 UTF8 字符的测试数据
         executeSql("INSERT INTO test_utf8 (value) VALUES ('测试')");
@@ -184,6 +184,20 @@ public class TestDataTypes extends TestBase {
         while (rs.next()) {
             String value = rs.getString("value");
             assert value != null;
+            System.out.println("Retrieved UTF-8 value: '" + value + "'");
+            System.out.println("Value length: " + value.length());
+            System.out.println("Value bytes (UTF-8): " + java.util.Arrays.toString(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            System.out.println("Value bytes (ISO-8859-1): " + java.util.Arrays.toString(value.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)));
+            
+            // 尝试转换
+            try {
+                byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+                String converted = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                System.out.println("Converted value: '" + converted + "'");
+            } catch (Exception e) {
+                System.out.println("Conversion error: " + e.getMessage());
+            }
+            
             assert value.equals("测试") || value.equals("你好世界") || value.equals("こんにちは");
         }
         rs.close();
@@ -198,7 +212,7 @@ public class TestDataTypes extends TestBase {
     @Test
     public void testDataTypeConversion() throws SQLException {
         // 创建测试表
-        executeSql("CREATE TABLE IF NOT EXISTS test_conversion (id INTEGER PRIMARY KEY, int_value INTEGER, real_value REAL, text_value TEXT)");
+        executeSql("CREATE TABLE IF NOT EXISTS test_conversion (id INTEGER PRIMARY KEY AUTOINCREMENT, int_value INTEGER, real_value REAL, text_value TEXT)");
 
         // 插入测试数据
         executeSql("INSERT INTO test_conversion (int_value, real_value, text_value) VALUES (100, 200.5, '300')");
