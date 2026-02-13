@@ -64,8 +64,10 @@ impl ConnectionManager {
                     if retry_count >= self.max_retries {
                         return Err(e);
                     }
-                    info!("Connection failed (attempt {}/{}), retrying in {:?}...",
-                          retry_count, self.max_retries, self.retry_delay);
+                    info!(
+                        "Connection failed (attempt {}/{}), retrying in {:?}...",
+                        retry_count, self.max_retries, self.retry_delay
+                    );
                     std::thread::sleep(self.retry_delay);
                 }
             }
@@ -110,8 +112,10 @@ impl ConnectionManager {
                         if retry_count >= self.max_retries {
                             return Err(e);
                         }
-                        info!("Connection lost, attempting to reconnect (attempt {}/{})...",
-                              retry_count, self.max_retries);
+                        info!(
+                            "Connection lost, attempting to reconnect (attempt {}/{})...",
+                            retry_count, self.max_retries
+                        );
                         self.reconnect()?;
                     } else {
                         return Err(e);
@@ -148,8 +152,10 @@ impl ConnectionManager {
                         if retry_count >= self.max_retries {
                             return Err(e);
                         }
-                        info!("Connection lost, attempting to reconnect (attempt {}/{})...",
-                              retry_count, self.max_retries);
+                        info!(
+                            "Connection lost, attempting to reconnect (attempt {}/{})...",
+                            retry_count, self.max_retries
+                        );
                         self.reconnect()?;
                     } else {
                         return Err(e);
@@ -306,7 +312,9 @@ fn main() {
                 if command.starts_with("use database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        eprintln!("Error: Invalid use database command. Use 'use database <database_name>'.");
+                        eprintln!(
+                            "Error: Invalid use database command. Use 'use database <database_name>'."
+                        );
                         continue;
                     }
 
@@ -319,12 +327,19 @@ fn main() {
                 if command.starts_with("close database ") {
                     let parts: Vec<&str> = original_line.split_whitespace().collect();
                     if parts.len() != 3 {
-                        eprintln!("Error: Invalid close database command. Use 'close database <database_name>'.");
+                        eprintln!(
+                            "Error: Invalid close database command. Use 'close database <database_name>'."
+                        );
                         continue;
                     }
 
                     let database_name = parts[2];
-                    execute_sql(&mut conn_manager, original_line, &mut request_id, &current_database);
+                    execute_sql(
+                        &mut conn_manager,
+                        original_line,
+                        &mut request_id,
+                        &current_database,
+                    );
                     if let Some(current_db) = &current_database {
                         if current_db == database_name {
                             current_database = None;
@@ -335,7 +350,22 @@ fn main() {
                 }
 
                 if command == "databases" {
-                    execute_sql(&mut conn_manager, "show databases", &mut request_id, &current_database);
+                    execute_sql(
+                        &mut conn_manager,
+                        "show databases",
+                        &mut request_id,
+                        &current_database,
+                    );
+                    continue;
+                }
+
+                if command == "tables" {
+                    execute_sql(
+                        &mut conn_manager,
+                        "show tables",
+                        &mut request_id,
+                        &current_database,
+                    );
                     continue;
                 }
 
@@ -365,7 +395,12 @@ fn main() {
                                 if trimmed_line.ends_with(';') {
                                     let statement = current_statement.trim_end_matches(';').trim();
                                     if !statement.is_empty() {
-                                        execute_sql(&mut conn_manager, statement, &mut request_id, &current_database);
+                                        execute_sql(
+                                            &mut conn_manager,
+                                            statement,
+                                            &mut request_id,
+                                            &current_database,
+                                        );
                                     }
                                     current_statement.clear();
                                 }
@@ -373,7 +408,12 @@ fn main() {
 
                             let statement = current_statement.trim();
                             if !statement.is_empty() {
-                                execute_sql(&mut conn_manager, statement, &mut request_id, &current_database);
+                                execute_sql(
+                                    &mut conn_manager,
+                                    statement,
+                                    &mut request_id,
+                                    &current_database,
+                                );
                             }
 
                             println!("✓ Successfully executed commands from file: {}", file_path);
@@ -385,7 +425,12 @@ fn main() {
                     continue;
                 }
 
-                execute_sql(&mut conn_manager, original_line, &mut request_id, &current_database);
+                execute_sql(
+                    &mut conn_manager,
+                    original_line,
+                    &mut request_id,
+                    &current_database,
+                );
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 println!("\nReceived interrupt signal, exiting...");
@@ -399,18 +444,25 @@ fn main() {
     }
 }
 
-fn execute_sql(conn_manager: &mut ConnectionManager, sql: &str, request_id: &mut u64, current_database: &Option<String>) {
+fn execute_sql(
+    conn_manager: &mut ConnectionManager,
+    sql: &str,
+    request_id: &mut u64,
+    current_database: &Option<String>,
+) {
     let sql_lower = sql.trim().to_lowercase();
-    let needs_database = !sql_lower.starts_with("create database ") &&
-                         !sql_lower.starts_with("drop database ") &&
-                         !sql_lower.starts_with("use database ") &&
-                         !sql_lower.starts_with("show databases") &&
-                         !sql_lower.starts_with("stat") &&
-                         !sql_lower.starts_with("healthcheck") &&
-                         !sql_lower.starts_with("flush");
+    let needs_database = !sql_lower.starts_with("create database ")
+        && !sql_lower.starts_with("drop database ")
+        && !sql_lower.starts_with("use database ")
+        && !sql_lower.starts_with("show databases")
+        && !sql_lower.starts_with("stat")
+        && !sql_lower.starts_with("healthcheck")
+        && !sql_lower.starts_with("flush");
 
     if needs_database && current_database.is_none() {
-        eprintln!("Error: No database selected. Please use 'use database <database_name>' to select a database first.");
+        eprintln!(
+            "Error: No database selected. Please use 'use database <database_name>' to select a database first."
+        );
         return;
     }
 
@@ -560,13 +612,17 @@ fn value_to_string(value: &Value) -> String {
 fn format_vector_data(vector_data: &VectorData) -> String {
     if !vector_data.values.is_empty() {
         // 使用float值
-        let values: Vec<String> = vector_data.values.iter()
+        let values: Vec<String> = vector_data
+            .values
+            .iter()
             .map(|v| format!("{:.4}", v))
             .collect();
         format!("vector[{}]", values.join(", "))
     } else if !vector_data.double_values.is_empty() {
         // 使用double值
-        let values: Vec<String> = vector_data.double_values.iter()
+        let values: Vec<String> = vector_data
+            .double_values
+            .iter()
             .map(|v| format!("{:.4}", v))
             .collect();
         format!("vector[{}]", values.join(", "))

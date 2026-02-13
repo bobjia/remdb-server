@@ -4,579 +4,29 @@ use remdb::{
 };
 
 use clap::Parser;
-use core::ptr;
+use remdb::log::{error, info, warn};
+use remdb_server::bootstrap::init_platform;
+use remdb_server::config::loader::Args;
+use remdb_server::config::{self, Config, HaConfig, PubSubConfig, WALConfig};
 use remdb_server::jdbc_server::JdbcServer;
 use remdb_server::{is_debug_mode, set_debug_mode};
-use remdb::log::{error, info, warn};
-use serde::Deserialize;
 use std::fs;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-mod macros;
 mod benchmark;
 mod cli;
 mod ddl_compiler;
 mod handler;
+mod macros;
 mod pool;
 mod proto;
 mod snapshot_loader;
 mod sql_engine;
 mod tuning;
 
-// 定义Windows平台实现，用于非POSIX平台
-struct WindowsPlatform;
-
-impl remdb::platform::Platform for WindowsPlatform {
-    fn get_timestamp(&self) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards");
-        now.as_millis() as u64
-    }
-
-    fn get_timestamp_us(&self) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards");
-        now.as_micros() as u64
-    }
-
-    fn spin_lock(&self, lock: &mut u32) {
-        // 使用原子比较交换实现自旋锁
-        while unsafe {
-            core::sync::atomic::AtomicU32::from_ptr(lock as *mut u32)
-                .compare_exchange(
-                    0,
-                    1,
-                    core::sync::atomic::Ordering::Acquire,
-                    core::sync::atomic::Ordering::Relaxed,
-                )
-                .is_err()
-        } {
-            // 自旋等待
-            core::hint::spin_loop();
-        }
-    }
-
-    fn spin_unlock(&self, lock: &mut u32) {
-        unsafe {
-            core::sync::atomic::AtomicU32::from_ptr(lock as *mut u32)
-                .store(0, core::sync::atomic::Ordering::Release);
-        }
-    }
-
-    fn compiler_barrier(&self) {
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    }
-
-    fn full_memory_barrier(&self) {
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    }
-
-    fn memcpy(&self, dest: *mut u8, src: *const u8, size: usize) {
-        unsafe {
-            ptr::copy_nonoverlapping(src, dest, size);
-        }
-    }
-
-    fn memset(&self, dest: *mut u8, value: u8, size: usize) {
-        unsafe {
-            ptr::write_bytes(dest, value, size);
-        }
-    }
-
-    fn delay_ms(&self, ms: u32) {
-        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
-    }
-
-    fn delay_us(&self, us: u32) {
-        std::thread::sleep(std::time::Duration::from_micros(us as u64));
-    }
-
-    fn file_open(
-        &self,
-        path: &str,
-        mode: remdb::platform::FileMode,
-    ) -> remdb::platform::FileResult<remdb::platform::FileHandle> {
-        use std::fs::OpenOptions;
-
-        let mut options = OpenOptions::new();
-        match mode {
-            remdb::platform::FileMode::Read => {
-                options.read(true);
-            }
-            remdb::platform::FileMode::Write => {
-                options.write(true).create(true).truncate(true);
-            }
-            remdb::platform::FileMode::ReadWrite => {
-                options.read(true).write(true).create(true);
-            }
-            remdb::platform::FileMode::Append => {
-                options.write(true).create(true).append(true);
-            }
-        }
-
-        match options.open(path) {
-            Ok(file) => {
-                let boxed_file = Box::new(file);
-                Ok(Box::into_raw(boxed_file) as remdb::platform::FileHandle)
-            }
-            Err(_) => Err(()),
-        }
-    }
-
-    fn file_close(&self, handle: remdb::platform::FileHandle) -> remdb::platform::FileResult<()> {
-        unsafe {
-            let _ = Box::from_raw(handle as *mut std::fs::File);
-        }
-        Ok(())
-    }
-
-    fn file_write(
-        &self,
-        handle: remdb::platform::FileHandle,
-        buffer: *const u8,
-        size: usize,
-    ) -> remdb::platform::FileResult<usize> {
-        unsafe {
-            let file = &mut *(handle as *mut std::fs::File);
-            let slice = core::slice::from_raw_parts(buffer, size);
-            match file.write(slice) {
-                Ok(bytes_written) => {
-                    file.flush().map_err(|_| ())?;
-                    Ok(bytes_written)
-                }
-                Err(_) => Err(()),
-            }
-        }
-    }
-
-    fn file_read(
-        &self,
-        handle: remdb::platform::FileHandle,
-        buffer: *mut u8,
-        size: usize,
-    ) -> remdb::platform::FileResult<usize> {
-        unsafe {
-            let file = &mut *(handle as *mut std::fs::File);
-            let slice = core::slice::from_raw_parts_mut(buffer, size);
-            match file.read(slice) {
-                Ok(bytes_read) => Ok(bytes_read),
-                Err(_) => Err(()),
-            }
-        }
-    }
-
-    fn file_seek(
-        &self,
-        handle: remdb::platform::FileHandle,
-        offset: i64,
-        whence: remdb::platform::SeekWhence,
-    ) -> remdb::platform::FileResult<u64> {
-        use std::io::Seek;
-
-        unsafe {
-            let file = &mut *(handle as *mut std::fs::File);
-            let seek_from = match whence {
-                remdb::platform::SeekWhence::SeekSet => std::io::SeekFrom::Start(offset as u64),
-                remdb::platform::SeekWhence::SeekCur => std::io::SeekFrom::Current(offset),
-                remdb::platform::SeekWhence::SeekEnd => std::io::SeekFrom::End(offset),
-            };
-            match file.seek(seek_from) {
-                Ok(new_pos) => Ok(new_pos),
-                Err(_) => Err(()),
-            }
-        }
-    }
-
-    fn file_remove(&self, path: &str) -> remdb::platform::FileResult<()> {
-        match std::fs::remove_file(path) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(()),
-        }
-    }
-
-    fn file_size(&self, path: &str) -> remdb::platform::FileResult<usize> {
-        use std::fs::metadata;
-        match metadata(path) {
-            Ok(metadata) => Ok(metadata.len() as usize),
-            Err(_) => Err(()),
-        }
-    }
-
-    fn crc32(&self, data: *const u8, size: usize) -> u32 {
-        const CRC32_POLY: u32 = 0xEDB88320;
-        let mut crc_table = [0u32; 256];
-        for i in 0..256 {
-            let mut crc = i as u32;
-            for _ in 0..8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ CRC32_POLY;
-                } else {
-                    crc >>= 1;
-                }
-            }
-            crc_table[i] = crc;
-        }
-        let mut crc = 0xFFFFFFFFu32;
-        let data_slice = unsafe { core::slice::from_raw_parts(data, size) };
-        for &byte in data_slice {
-            let index = ((crc ^ byte as u32) & 0xFF) as usize;
-            crc = (crc >> 8) ^ crc_table[index];
-        }
-        crc ^ 0xFFFFFFFFu32
-    }
-}
-
-// 创建静态平台实例
-static WINDOWS_PLATFORM: WindowsPlatform = WindowsPlatform;
-
-/// WAL配置
-#[derive(Deserialize, Debug, Default)]
-struct WALConfig {
-    /// 日志文件路径
-    log_path: Option<String>,
-
-    /// 日志模式，可选值：async, sync
-    log_mode: Option<String>,
-
-    /// 检查点间隔（毫秒）
-    checkpoint_interval_ms: Option<u64>,
-
-    /// 日志文件大小限制（字节）
-    log_file_size_limit: Option<usize>,
-
-    /// 日志预分配大小（字节）
-    log_prealloc_size: Option<usize>,
-
-    /// 日志段大小（字节）
-    log_segment_size: Option<usize>,
-
-    /// 保留的检查点数量
-    retained_checkpoints: Option<usize>,
-    /// 恢复时最大连续无效记录数，达到此值后停止恢复
-    max_consecutive_invalid: Option<u32>,
-    /// 恢复时跳过预分配空间的阈值（连续无效记录数）
-    skip_threshold: Option<u32>,
-    /// 恢复时跳过的块大小（字节）
-    skip_block_size: Option<usize>,
-    /// 恢复时最大跳过尝试次数
-    max_skip_attempts: Option<u32>,
-}
-
-/// 高可用配置
-#[derive(Deserialize, Debug, Default)]
-struct HaConfig {
-    /// 是否启用高可用功能
-    enabled: Option<bool>,
-
-    /// 节点ID
-    node_id: Option<String>,
-
-    /// 节点角色（master/slave）
-    role: Option<String>,
-
-    /// 复制模式（async/sync）
-    replication_mode: Option<String>,
-
-    /// 心跳间隔（毫秒）
-    heartbeat_interval: Option<u64>,
-
-    /// 故障检测时间（毫秒）
-    failure_detection_ms: Option<u64>,
-
-    /// 同步超时时间（毫秒）
-    sync_timeout_ms: Option<u64>,
-
-    /// 主节点地址（仅slave节点需要）
-    master_address: Option<String>,
-
-    /// 主节点端口（仅slave节点需要）
-    master_port: Option<u16>,
-
-    /// 复制端口（用于WAL日志复制和数据同步）
-    replication_port: Option<u16>,
-}
-
-/// 配置文件结构体
-#[derive(Deserialize, Debug, Default)]
-struct Config {
-    /// 快照存储目录
-    snapshot_dir: Option<String>,
-
-    /// 数据库总内存大小（字节）
-    total_memory: Option<usize>,
-
-    /// 默认最大记录数
-    default_max_records: Option<usize>,
-
-    /// 是否支持低功耗模式
-    low_power_mode_supported: Option<bool>,
-
-    /// 低功耗模式下的最大记录数
-    low_power_max_records: Option<usize>,
-
-    /// 日志文件路径
-    log_path: Option<String>,
-
-    /// 增量快照周期（秒）
-    snapshot_interval: Option<u64>,
-
-    /// 快照类型：full（全量）或incremental（增量）
-    snapshot_type: Option<String>,
-
-    /// 最大增量快照数量
-    max_incremental_snapshots: Option<usize>,
-
-    /// 是否开启debug模式
-    debug: Option<bool>,
-
-    /// JDBC监听端口
-    jdbc_port: Option<u16>,
-
-    /// 是否启用JDBC服务
-    jdbc_enabled: Option<bool>,
-
-    /// 最大允许的并发jdbc客户端连接数
-    max_connections: Option<usize>,
-
-    /// JDBC执行超时时间（秒）
-    jdbc_timeout: Option<u64>,
-
-    /// JDBC认证配置
-    /// 是否启用JDBC认证
-    jdbc_auth_enabled: Option<bool>,
-    /// JDBC认证用户名
-    jdbc_username: Option<String>,
-    /// JDBC认证密码哈希值
-    jdbc_password_hash: Option<String>,
-
-    /// DDL文件路径
-    ddl_path: Option<String>,
-
-    /// pubsub配置
-    pubsub: Option<PubSubConfig>,
-
-    /// WAL配置
-    wal: Option<WALConfig>,
-
-    /// 高可用配置
-    ha: Option<HaConfig>,
-}
-
-/// pubsub配置
-#[derive(Deserialize, Debug, Default)]
-struct PubSubConfig {
-    /// 是否启用pubsub功能
-    enabled: Option<bool>,
-
-    /// UDP绑定地址
-    udp_bind_address: Option<String>,
-
-    /// 心跳间隔（毫秒）
-    heartbeat_interval: Option<u32>,
-
-    /// 重传超时（毫秒）
-    retransmission_timeout: Option<u32>,
-
-    /// 最大重传次数
-    max_retransmissions: Option<u32>,
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[command(subcommand)]
-    command: Option<Command>,
-
-    /// 配置文件路径
-    #[arg(long, short)]
-    config: Option<String>,
-
-    /// 快照存储目录
-    #[arg(long)]
-    snapshot_dir: Option<String>,
-
-    /// 全量镜像文件路径
-    #[arg(long)]
-    full_image: Option<String>,
-
-    /// 数据库总内存大小（字节）
-    #[arg(long)]
-    total_memory: Option<usize>,
-
-    /// 默认最大记录数
-    #[arg(long)]
-    default_max_records: Option<usize>,
-
-    /// 是否支持低功耗模式
-    #[arg(long)]
-    low_power_mode_supported: Option<bool>,
-
-    /// 低功耗模式下的最大记录数
-    #[arg(long)]
-    low_power_max_records: Option<usize>,
-
-    /// 日志文件路径
-    #[arg(long)]
-    log_path: Option<String>,
-
-    /// 增量快照周期（秒）
-    #[arg(long)]
-    snapshot_interval: Option<u64>,
-
-    /// 快照类型：full（全量）或incremental（增量）
-    #[arg(long)]
-    snapshot_type: Option<String>,
-
-    /// 最大增量快照数量
-    #[arg(long)]
-    max_incremental_snapshots: Option<usize>,
-
-    /// 是否开启debug模式
-    #[arg(long, short)]
-    debug: bool,
-
-    /// 非交互式模式（初始化后退出）
-    #[arg(long)]
-    non_interactive: bool,
-
-    /// 测试导出功能
-    #[arg(long)]
-    test_export: bool,
-
-    /// JDBC监听端口
-    #[arg(long)]
-    jdbc_port: Option<u16>,
-
-    /// 是否启用JDBC服务
-    #[arg(long)]
-    jdbc_enabled: Option<bool>,
-
-    /// 最大允许的并发jdbc客户端连接数
-    #[arg(long)]
-    max_connections: Option<usize>,
-
-    /// JDBC执行超时时间（秒）
-    #[arg(long)]
-    jdbc_timeout: Option<u64>,
-
-    /// 是否启用JDBC认证
-    #[arg(long)]
-    jdbc_auth_enabled: Option<bool>,
-
-    /// JDBC认证用户名
-    #[arg(long)]
-    jdbc_username: Option<String>,
-
-    /// JDBC认证密码哈希值
-    #[arg(long)]
-    jdbc_password_hash: Option<String>,
-
-    /// 是否启用pubsub功能
-    #[arg(long)]
-    pubsub_enabled: Option<bool>,
-
-    /// UDP绑定地址
-    #[arg(long)]
-    pubsub_udp_bind: Option<String>,
-
-    /// 心跳间隔（毫秒）
-    #[arg(long)]
-    pubsub_heartbeat: Option<u32>,
-
-    /// 重传超时（毫秒）
-    #[arg(long)]
-    pubsub_retrans_timeout: Option<u32>,
-
-    /// 最大重传次数
-    #[arg(long)]
-    pubsub_max_retrans: Option<u32>,
-
-    /// 是否启用高可用功能
-    #[arg(long)]
-    ha_enabled: Option<bool>,
-
-    /// 节点角色（master/slave）
-    #[arg(long)]
-    ha_role: Option<String>,
-
-    /// 复制模式（async/sync）
-    #[arg(long)]
-    ha_replication_mode: Option<String>,
-
-    /// 心跳间隔（毫秒）
-    #[arg(long)]
-    ha_heartbeat_interval: Option<u64>,
-
-    /// 故障检测时间（毫秒）
-    #[arg(long)]
-    ha_failure_detection_ms: Option<u64>,
-
-    /// 同步超时时间（毫秒）
-    #[arg(long)]
-    ha_sync_timeout_ms: Option<u64>,
-
-    /// 主节点地址（仅slave节点需要）
-    #[arg(long)]
-    ha_master_address: Option<String>,
-
-    /// 主节点端口（仅slave节点需要）
-    #[arg(long)]
-    ha_master_port: Option<u16>,
-
-    /// 复制端口（用于WAL日志复制和数据同步）
-    #[arg(long)]
-    ha_replication_port: Option<u16>,
-
-    /// 心跳端口（用于节点间心跳检测）
-    #[arg(long)]
-    ha_heartbeat_port: Option<u16>,
-
-    /// 节点ID
-    #[arg(long)]
-    ha_node_id: Option<String>,
-}
-
-/// 子命令定义
-#[derive(Parser, Debug)]
-enum Command {
-    /// 运行基准测试
-    Benchmark {
-        /// 查询次数
-        #[arg(long, default_value = "100000")]
-        query_count: usize,
-
-        /// 并发连接数
-        #[arg(long, default_value = "16")]
-        connections: usize,
-
-        /// 查询模板
-        #[arg(long, default_value = "SELECT * FROM test_table WHERE id = {}")]
-        query_template: String,
-
-        /// 服务器URL
-        #[arg(long, default_value = "jdbc:remdb://localhost:6666")]
-        server_url: String,
-
-        /// 测试类型（query、write或mix）
-        #[arg(long, default_value = "query")]
-        test_type: String,
-
-        /// 写入模板
-        #[arg(
-            long,
-            default_value = "INSERT INTO test_table (id, value) VALUES ({}, {}) ON DUPLICATE KEY UPDATE value = {}"
-        )]
-        write_template: String,
-
-        /// 读写比例，格式为"8:2"
-        #[arg(long, default_value = "8:2")]
-        read_write_ratio: String,
-    },
-}
+use remdb_server::config::loader::Command;
 
 #[tokio::main]
 async fn main() {
@@ -587,7 +37,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    let message = "remdb-server v0.2.0";
+    let message = "remdb-server v0.3.0";
     info!("{}", message);
 
     // 处理子命令
@@ -812,7 +262,7 @@ async fn main() {
             .as_secs();
         format!("{}/remdb-server-{}.log", log_file_path, timestamp)
     };
-    
+
     match remdb::init_logger_with_file(&log_file_name, debug_mode) {
         Ok(_) => {
             info!("Log file initialized at: {}", log_file_name);
@@ -824,7 +274,7 @@ async fn main() {
 
     // 手动初始化平台
     info!("Manually initializing platform...");
-    remdb::platform::init_platform(&WINDOWS_PLATFORM);
+    init_platform();
     info!("Platform initialized manually");
 
     // 尝试从config中获取ddl_path，如果存在则加载
@@ -833,9 +283,12 @@ async fn main() {
         info!("Loading DDL file: {}", ddl_path);
         match ddl_compiler::compile_ddl_file(ddl_path) {
             Ok(result) => {
-                info!("DDL file loaded successfully, {} tables created", result.0.len());
+                info!(
+                    "DDL file loaded successfully, {} tables created",
+                    result.0.len()
+                );
                 result
-            },
+            }
             Err(err) => {
                 warn!("Failed to load DDL file: {}, using empty tables", err);
                 (Vec::new(), Vec::new())
@@ -844,44 +297,66 @@ async fn main() {
     } else {
         // 没有配置DDL文件，尝试从快照目录加载表定义
         let mut tables_from_snapshot = Vec::new();
-        let mut snapshot_dir_for_recovery = None;
 
         // 优先从快照目录加载表定义
         if let Some(dir) = &snapshot_dir {
-            info!("No DDL file configured, attempting to load table definitions from snapshot directory: {}", dir);
+            info!(
+                "No DDL file configured, attempting to load table definitions from snapshot directory: {}",
+                dir
+            );
             match snapshot_loader::load_table_defs_from_dir(dir) {
                 Ok(loaded_tables) => {
-                    info!("Loaded {} table definitions from snapshot directory", loaded_tables.len());
+                    info!(
+                        "Loaded {} table definitions from snapshot directory",
+                        loaded_tables.len()
+                    );
                     tables_from_snapshot = loaded_tables;
-                    snapshot_dir_for_recovery = Some(dir.clone());
                 }
                 Err(err) => {
-                    warn!("Failed to load table definitions from snapshot directory: {:?}", err);
+                    warn!(
+                        "Failed to load table definitions from snapshot directory: {:?}",
+                        err
+                    );
                 }
             }
         }
 
         // 如果快照目录没有，尝试从WAL目录加载
         if tables_from_snapshot.is_empty() {
-            let wal_dir = &config.wal.as_ref().and_then(|w| w.log_path.clone()).unwrap_or_else(|| "./wal".to_string());
-            info!("Attempting to load table definitions from WAL directory: {}", wal_dir);
+            let wal_dir = &config
+                .wal
+                .as_ref()
+                .and_then(|w| w.log_path.clone())
+                .unwrap_or_else(|| "./wal".to_string());
+            info!(
+                "Attempting to load table definitions from WAL directory: {}",
+                wal_dir
+            );
             if std::path::Path::new(wal_dir).exists() {
                 // 从WAL目录查找快照文件
                 match snapshot_loader::load_table_defs_from_dir(wal_dir) {
                     Ok(loaded_tables) => {
-                        info!("Loaded {} table definitions from WAL directory", loaded_tables.len());
+                        info!(
+                            "Loaded {} table definitions from WAL directory",
+                            loaded_tables.len()
+                        );
                         tables_from_snapshot = loaded_tables;
-                        snapshot_dir_for_recovery = Some(wal_dir.to_string());
                     }
                     Err(err) => {
-                        warn!("Failed to load table definitions from WAL directory: {:?}", err);
+                        warn!(
+                            "Failed to load table definitions from WAL directory: {:?}",
+                            err
+                        );
                     }
                 }
             }
         }
 
         if !tables_from_snapshot.is_empty() {
-            info!("Using table definitions loaded from snapshot: {} tables", tables_from_snapshot.len());
+            info!(
+                "Using table definitions loaded from snapshot: {} tables",
+                tables_from_snapshot.len()
+            );
             (tables_from_snapshot, Vec::new())
         } else {
             info!("No DDL file and no snapshot found, using empty tables");
@@ -1005,10 +480,7 @@ async fn main() {
     if let Err(err) =
         unsafe { remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory) }
     {
-        error!(
-            "Failed to initialize global memory allocator: {:?}",
-            err
-        );
+        error!("Failed to initialize global memory allocator: {:?}", err);
         return;
     }
 
@@ -1020,6 +492,10 @@ async fn main() {
             return;
         }
     };
+
+    // 初始化索引构建线程池
+    remdb::init_index_build_thread_pool(4);
+    info!("Index build thread pool initialized with 4 threads");
 
     info!("Database initialized with {} tables", config.tables.len());
 
@@ -1046,7 +522,8 @@ async fn main() {
                 // 如果WAL恢复失败，尝试从快照目录加载
                 if let Some(snapshot_dir) = &snapshot_dir {
                     info!("Falling back to snapshot directory: {}", snapshot_dir);
-                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir) {
+                    if let Err(err) = snapshot_loader::load_snapshot_from_dir(&mut db, snapshot_dir)
+                    {
                         warn!("Failed to load snapshot: {:?}", err);
                     } else {
                         info!("Snapshot loaded successfully");
@@ -1175,9 +652,7 @@ async fn main() {
 
         info!(
             "Starting JDBC server on port {} with max connections {} and timeout {} seconds",
-            actual_jdbc_port,
-            max_conns,
-            jdbc_timeout
+            actual_jdbc_port, max_conns, jdbc_timeout
         );
         info!(
             "JDBC authentication: {}",
@@ -1248,8 +723,7 @@ async fn main() {
 
                 info!(
                     "Starting snapshot timer with interval {} seconds, type: {}",
-                    interval_secs,
-                    snap_type
+                    interval_secs, snap_type
                 );
 
                 // 在后台启动快照定时器
@@ -1261,8 +735,8 @@ async fn main() {
                         timer.tick().await;
 
                         // 尝试获取全局数据库实例
-                        let db_opt = unsafe { remdb::get_global_db() };
-                        if let Some(mut db_guard) = db_opt {
+                        let db_opt = remdb::get_global_db();
+                        if let Some(db_guard) = db_opt {
                             let db = &mut *db_guard;
 
                             // 记录开始时间

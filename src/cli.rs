@@ -3,7 +3,7 @@ use crate::snapshot_loader::{
 };
 use crate::sql_engine::{execute_extended_sql, format_result_set};
 use remdb::RemDb;
-use remdb::log::{info, error};
+use remdb::log::{error, info};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
 use rustyline::{Config, Editor};

@@ -1,5 +1,5 @@
 use crate::handler::JdbcProtocolHandler;
-use crate::handler::health_monitor::{ServerHealthMonitor, HealthStatus};
+use crate::handler::health_monitor::{HealthStatus, ServerHealthMonitor};
 use crate::pool::HighPerfConnectionPool;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
 use crate::tuning::SystemTuner;
@@ -49,7 +49,7 @@ impl JdbcServer {
 
         // 创建高性能组件
         let protocol_handler = Arc::new(JdbcProtocolHandler::new(
-            worker_count, 
+            worker_count,
             db.clone(),
             auth_enabled,
             username.clone(),

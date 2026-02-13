@@ -1,5 +1,5 @@
 use remdb::RemDb;
-use remdb::transaction::{TransactionType, IsolationLevel};
+use remdb::transaction::{IsolationLevel, TransactionType};
 use std::error::Error;
 use std::fmt;
 
@@ -72,7 +72,10 @@ impl SafeDatabaseOperations {
         unsafe {
             match db.flush_logs() {
                 Ok(_) => Ok(()),
-                Err(err) => Err(DatabaseError::QueryError(format!("Flush logs error: {:?}", err))),
+                Err(err) => Err(DatabaseError::QueryError(format!(
+                    "Flush logs error: {:?}",
+                    err
+                ))),
             }
         }
     }

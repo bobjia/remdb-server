@@ -35,9 +35,9 @@ impl ServerHealthMonitor {
         let error_count = self.error_count.fetch_add(1, Ordering::SeqCst);
         let consecutive = self.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
         let now = Instant::now().elapsed().as_secs() as u64;
-        
+
         self.last_error_time.store(now, Ordering::SeqCst);
-        
+
         if consecutive >= self.max_consecutive_errors {
             self.status.store(false, Ordering::SeqCst);
             self.recovery_mode.store(true, Ordering::SeqCst);
@@ -46,7 +46,7 @@ impl ServerHealthMonitor {
             self.status.store(false, Ordering::SeqCst);
             return HealthStatus::Degraded;
         }
-        
+
         HealthStatus::Healthy
     }
 
@@ -59,11 +59,11 @@ impl ServerHealthMonitor {
         if self.recovery_mode.load(Ordering::SeqCst) {
             return HealthStatus::Critical;
         }
-        
+
         if self.status.load(Ordering::SeqCst) {
             return HealthStatus::Healthy;
         }
-        
+
         HealthStatus::Degraded
     }
 

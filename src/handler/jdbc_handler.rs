@@ -1,6 +1,6 @@
+use crate::handler::safe_database_ops::SafeDatabaseOperations;
 use crate::proto::*;
 use crate::sql_engine::{ResultSet, execute_extended_sql};
-use crate::handler::safe_database_ops::SafeDatabaseOperations;
 use bytes::Bytes;
 use crossbeam::queue::SegQueue;
 use hex;
@@ -116,16 +116,18 @@ impl WorkerThread {
                     let mut db_guard = match db_clone.lock() {
                         Ok(guard) => guard,
                         Err(poisoned) => {
-                            error!("Mutex was poisoned, this indicates a thread panic while holding the lock");
+                            error!(
+                                "Mutex was poisoned, this indicates a thread panic while holding the lock"
+                            );
                             error!("This is a critical error that requires server restart");
-                            
+
                             let error_response = JdbcResponse {
                                 request_id: request.request_id,
                                 status: Status::ServerError.into(),
                                 error_message: "Database is in inconsistent state due to internal error. Please restart the server.".to_string(),
                                 response: None,
                             };
-                            
+
                             let tx: tokio::sync::mpsc::UnboundedSender<JdbcResponse> = response_tx;
                             if tx.send(error_response).is_err() {
                                 error!("Failed to send error response: channel closed");
@@ -164,7 +166,7 @@ impl WorkerThread {
 impl JdbcProtocolHandler {
     /// 创建新的JDBC协议处理器
     pub fn new(
-        worker_count: usize, 
+        worker_count: usize,
         db: Arc<std::sync::Mutex<&'static mut RemDb>>,
         auth_enabled: bool,
         username: String,
@@ -175,8 +177,8 @@ impl JdbcProtocolHandler {
         let mut workers = Vec::with_capacity(worker_count);
         for i in 0..worker_count {
             let worker = WorkerThread::new(
-                i as u32, 
-                request_queue.clone(), 
+                i as u32,
+                request_queue.clone(),
                 db.clone(),
                 auth_enabled,
                 username.clone(),
@@ -310,7 +312,7 @@ impl JdbcProtocolHandler {
     /// 处理单个请求
     fn process_single_request(
         db: &mut RemDb,
-        request: JdbcRequest, 
+        request: JdbcRequest,
         auth_enabled: bool,
         expected_username: &str,
         expected_password_hash: &str,
@@ -398,8 +400,7 @@ impl JdbcProtocolHandler {
                         let tx_response = TransactionResponse {
                             transaction_id: 0, // TODO: 实现事务ID生成
                         };
-                        response.response =
-                            Some(jdbc_response::Response::Transaction(tx_response));
+                        response.response = Some(jdbc_response::Response::Transaction(tx_response));
                     }
                     Err(err) => {
                         response.status = Status::Error.into();
@@ -412,8 +413,7 @@ impl JdbcProtocolHandler {
                 match SafeDatabaseOperations::commit_transaction(db) {
                     Ok(_) => {
                         let tx_response = TransactionResponse { transaction_id: 0 };
-                        response.response =
-                            Some(jdbc_response::Response::Transaction(tx_response));
+                        response.response = Some(jdbc_response::Response::Transaction(tx_response));
                     }
                     Err(err) => {
                         response.status = Status::Error.into();
@@ -426,8 +426,7 @@ impl JdbcProtocolHandler {
                 match SafeDatabaseOperations::rollback_transaction(db) {
                     Ok(_) => {
                         let tx_response = TransactionResponse { transaction_id: 0 };
-                        response.response =
-                            Some(jdbc_response::Response::Transaction(tx_response));
+                        response.response = Some(jdbc_response::Response::Transaction(tx_response));
                     }
                     Err(err) => {
                         response.status = Status::Error.into();
@@ -441,21 +440,23 @@ impl JdbcProtocolHandler {
                     // 验证用户名和密码
                     let provided_username = conn_req.username;
                     let provided_password = conn_req.password;
-                    
+
                     // 计算提供的密码的SHA-256哈希值
                     let mut hasher = Sha256::new();
                     hasher.update(provided_password);
                     let provided_hash = hasher.finalize();
                     let provided_hash_str = hex::encode(provided_hash);
-                    
+
                     // 比较用户名和哈希值
-                    if provided_username != expected_username || provided_hash_str != expected_password_hash {
+                    if provided_username != expected_username
+                        || provided_hash_str != expected_password_hash
+                    {
                         response.status = Status::Unauthorized.into();
                         response.error_message = "Invalid username or password".to_string();
                         return response;
                     }
                 }
-                
+
                 // 认证成功，返回连接响应
                 let conn_response = ConnectionResponse {
                     connection_id: 1,
@@ -505,12 +506,12 @@ impl JdbcProtocolHandler {
                 // 检查是否是向量值
                 if value.starts_with('[') && value.ends_with(']') {
                     // 这是一个向量值，尝试解析为float数组
-                    let vector_str = &value[1..value.len()-1];
+                    let vector_str = &value[1..value.len() - 1];
                     let elements: Vec<&str> = vector_str.split(',').map(|s| s.trim()).collect();
                     let mut float_values = Vec::new();
                     let mut double_values = Vec::new();
                     let mut is_double = false;
-                    
+
                     // 尝试解析元素
                     for elem in elements {
                         if let Ok(f) = elem.parse::<f32>() {
@@ -520,13 +521,13 @@ impl JdbcProtocolHandler {
                             is_double = true;
                         }
                     }
-                    
+
                     // 根据解析结果创建向量数据
                     let vector_data = VectorData {
                         values: if is_double { Vec::new() } else { float_values },
                         double_values: if is_double { double_values } else { Vec::new() },
                     };
-                    
+
                     let val = Value {
                         value: Some(value::Value::VectorData(vector_data)),
                     };
@@ -556,13 +557,15 @@ impl JdbcProtocolHandler {
     /// 批量请求处理
     pub async fn handle_batch(&self, batch: Vec<JdbcRequest>) -> Vec<JdbcResponse> {
         let mut responses = Vec::with_capacity(batch.len());
-        
+
         let mut db_lock = match self.db.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                error!("Mutex was poisoned during batch processing, this indicates a thread panic while holding the lock");
+                error!(
+                    "Mutex was poisoned during batch processing, this indicates a thread panic while holding the lock"
+                );
                 error!("This is a critical error that requires server restart");
-                
+
                 return batch.iter().map(|req| {
                     JdbcResponse {
                         request_id: req.request_id,
@@ -573,7 +576,7 @@ impl JdbcProtocolHandler {
                 }).collect();
             }
         };
-        
+
         let auth_enabled = self.auth_enabled;
         let username = self.username.clone();
         let password_hash = self.password_hash.clone();

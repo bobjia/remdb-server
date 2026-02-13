@@ -1,6 +1,6 @@
-use remdb::{RemDb, RemDbError, Result as RemResult, TableDef};
-use remdb::log::{info, error, warn};
+use remdb::log::{error, info, warn};
 use remdb::platform;
+use remdb::{RemDb, RemDbError, Result as RemResult, TableDef};
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
@@ -103,12 +103,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
     for _ in 0..table_count {
         // Read table ID
         let mut table_id_bytes = [0u8; 4];
-        let read = platform::file_read(
-            handle,
-            table_id_bytes.as_mut_ptr(),
-            table_id_bytes.len(),
-        )
-        .map_err(|_| RemDbError::FileIoError)?;
+        let read = platform::file_read(handle, table_id_bytes.as_mut_ptr(), table_id_bytes.len())
+            .map_err(|_| RemDbError::FileIoError)?;
         if read != table_id_bytes.len() {
             return Err(RemDbError::FileIoError);
         }
@@ -128,12 +124,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
         let table_name_len = table_name_len_bytes[0] as usize;
 
         let mut table_name_bytes = vec![0u8; table_name_len];
-        let read = platform::file_read(
-            handle,
-            table_name_bytes.as_mut_ptr(),
-            table_name_len,
-        )
-        .map_err(|_| RemDbError::FileIoError)?;
+        let read = platform::file_read(handle, table_name_bytes.as_mut_ptr(), table_name_len)
+            .map_err(|_| RemDbError::FileIoError)?;
         if read != table_name_len {
             return Err(RemDbError::FileIoError);
         }
@@ -221,12 +213,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
             let field_name_len = field_name_len_bytes[0] as usize;
 
             let mut field_name_bytes = vec![0u8; field_name_len];
-            let read = platform::file_read(
-                handle,
-                field_name_bytes.as_mut_ptr(),
-                field_name_len,
-            )
-            .map_err(|_| RemDbError::FileIoError)?;
+            let read = platform::file_read(handle, field_name_bytes.as_mut_ptr(), field_name_len)
+                .map_err(|_| RemDbError::FileIoError)?;
             if read != field_name_len {
                 return Err(RemDbError::FileIoError);
             }
@@ -234,12 +222,9 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
 
             // Read data type
             let mut data_type_bytes = [0u8; 1];
-            let read = platform::file_read(
-                handle,
-                data_type_bytes.as_mut_ptr(),
-                data_type_bytes.len(),
-            )
-            .map_err(|_| RemDbError::FileIoError)?;
+            let read =
+                platform::file_read(handle, data_type_bytes.as_mut_ptr(), data_type_bytes.len())
+                    .map_err(|_| RemDbError::FileIoError)?;
             if read != data_type_bytes.len() {
                 return Err(RemDbError::FileIoError);
             }
@@ -287,12 +272,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
 
             // Read field flags
             let mut flags_bytes = [0u8; 1];
-            let read = platform::file_read(
-                handle,
-                flags_bytes.as_mut_ptr(),
-                flags_bytes.len(),
-            )
-            .map_err(|_| RemDbError::FileIoError)?;
+            let read = platform::file_read(handle, flags_bytes.as_mut_ptr(), flags_bytes.len())
+                .map_err(|_| RemDbError::FileIoError)?;
             if read != flags_bytes.len() {
                 return Err(RemDbError::FileIoError);
             }
@@ -334,12 +315,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
         let mut primary_key_indices = Vec::new();
         for _ in 0..primary_key_count {
             let mut pk_idx_bytes = [0u8; 1];
-            let read = platform::file_read(
-                handle,
-                pk_idx_bytes.as_mut_ptr(),
-                pk_idx_bytes.len(),
-            )
-            .map_err(|_| RemDbError::FileIoError)?;
+            let read = platform::file_read(handle, pk_idx_bytes.as_mut_ptr(), pk_idx_bytes.len())
+                .map_err(|_| RemDbError::FileIoError)?;
             if read != pk_idx_bytes.len() {
                 return Err(RemDbError::FileIoError);
             }
@@ -351,12 +328,8 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
             let mut indices = Vec::new();
             for _ in 0..secondary_index_count {
                 let mut idx_bytes = [0u8; 1];
-                let read = platform::file_read(
-                    handle,
-                    idx_bytes.as_mut_ptr(),
-                    idx_bytes.len(),
-                )
-                .map_err(|_| RemDbError::FileIoError)?;
+                let read = platform::file_read(handle, idx_bytes.as_mut_ptr(), idx_bytes.len())
+                    .map_err(|_| RemDbError::FileIoError)?;
                 if read != idx_bytes.len() {
                     return Err(RemDbError::FileIoError);
                 }
@@ -405,18 +378,10 @@ pub fn load_table_defs_from_snapshot(snapshot_path: &str) -> RemResult<Vec<Table
         for _ in 0..record_count {
             // Skip record index
             let mut index_bytes = [0u8; 4];
-            let _ = platform::file_read(
-                handle,
-                index_bytes.as_mut_ptr(),
-                index_bytes.len(),
-            );
+            let _ = platform::file_read(handle, index_bytes.as_mut_ptr(), index_bytes.len());
             // Skip record data
             let mut dummy_record = vec![0u8; record_size];
-            let _ = platform::file_read(
-                handle,
-                dummy_record.as_mut_ptr(),
-                record_size,
-            );
+            let _ = platform::file_read(handle, dummy_record.as_mut_ptr(), record_size);
         }
     }
 
@@ -462,10 +427,14 @@ pub fn load_table_defs_from_dir(dir_path: &str) -> RemResult<Vec<TableDef>> {
     snapshots.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     // Find the latest full snapshot
-    if let Some(latest_snapshot) = snapshots.iter().find(|s| {
-        matches!(s.file_type, SnapshotType::FullSnapshot)
-    }) {
-        info!("Loading table definitions from latest snapshot: {}", latest_snapshot.path);
+    if let Some(latest_snapshot) = snapshots
+        .iter()
+        .find(|s| matches!(s.file_type, SnapshotType::FullSnapshot))
+    {
+        info!(
+            "Loading table definitions from latest snapshot: {}",
+            latest_snapshot.path
+        );
         load_table_defs_from_snapshot(&latest_snapshot.path)
     } else {
         warn!("No full snapshot found in directory");
@@ -759,13 +728,17 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
     // If there are WAL files to replay, try using LogManager for replay
     if !wal_files_to_replay.is_empty() {
         info!("Attempting to replay WAL files...");
-        
+
         // Validate WAL files before replay
         let mut valid_wal_files = Vec::new();
         for (path, seq) in &wal_files_to_replay {
             if let Ok(metadata) = std::fs::metadata(path) {
                 if metadata.len() > 0 {
-                    info!("Validating WAL file: {} (size: {} bytes)", path, metadata.len());
+                    info!(
+                        "Validating WAL file: {} (size: {} bytes)",
+                        path,
+                        metadata.len()
+                    );
                     valid_wal_files.push((path.clone(), *seq));
                 } else {
                     warn!("Skipping empty WAL file: {}", path);
@@ -774,17 +747,17 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
                 warn!("Failed to read WAL file metadata: {}, skipping", path);
             }
         }
-        
+
         if valid_wal_files.is_empty() {
             warn!("No valid WAL files found, skipping WAL replay");
             return Ok(());
         }
-        
+
         // Try using LogManager for WAL replay with validated files
         unsafe {
             if let Some(log_manager) = remdb::transaction::get_log_manager() {
                 info!("LogManager found, attempting recovery...");
-                
+
                 // Try recovery with more detailed error handling
                 match log_manager.recover(db) {
                     Ok(_) => {
@@ -796,10 +769,10 @@ pub fn load_from_wal_dir(db: &mut RemDb, wal_dir: &str) -> RemResult<()> {
                         error!("Critical: WAL recovery failed with error: {:?}", err);
                         error!("This may indicate data corruption or incomplete transactions");
                         error!("Please check WAL files in directory: {}", wal_dir);
-                        
+
                         // Try to continue with partial recovery
                         warn!("Attempting to continue with partial data recovery...");
-                        
+
                         // Return RemDbError directly
                         return Err(err);
                     }

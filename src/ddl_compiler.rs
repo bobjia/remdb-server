@@ -1,5 +1,5 @@
-use remdb::types::{DataType, FieldDef, TableDef};
 use remdb::log::info;
+use remdb::types::{DataType, FieldDef, TableDef};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -551,7 +551,10 @@ fn create_table_def(
     let mut field_defs = Vec::new();
 
     for col in columns {
-        info!("Debug: creating field {}: primary_key={}, auto_increment={}", col.name, col.primary_key, col.auto_increment);
+        info!(
+            "Debug: creating field {}: primary_key={}, auto_increment={}",
+            col.name, col.primary_key, col.auto_increment
+        );
         let field_def = FieldDef {
             name: col.name.to_string(),
             data_type: col.data_type,
@@ -586,7 +589,7 @@ fn create_table_def(
         secondary_index_type: remdb::types::IndexType::BTree,
         record_size: offset,
         max_records: 1000, // 允许1000条记录，支持多个记录
-        version: 1, // 初始版本号为1
+        version: 1,        // 初始版本号为1
         created_at: current_timestamp,
         updated_at: current_timestamp,
     })
