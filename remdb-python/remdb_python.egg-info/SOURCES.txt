@@ -12,6 +12,7 @@ remdb_python.egg-info/dependency_links.txt
 remdb_python.egg-info/requires.txt
 remdb_python.egg-info/top_level.txt
 src/remdb_extension.cpp
+tests/test_bindings.py
 tests/test_config.py
 tests/test_core.py
 tests/test_failed.py

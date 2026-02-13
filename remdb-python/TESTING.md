@@ -50,7 +50,7 @@ tests/
 
 ### 测试运行器
 
-- **run_tests.py**: 命令行测试运行器，支持多种测试配置选项
+- **run_tests.py**: 命令行测试运行器，支持 unittest 和 pytest 两种框架
 
 ## 测试覆盖范围
 
@@ -63,6 +63,7 @@ tests/
 - BOOLEAN
 - TIMESTAMP
 - VECTOR
+- JSON
 
 ### DDL 语句
 - CREATE TABLE
@@ -70,6 +71,7 @@ tests/
 - DROP TABLE
 - CREATE TIMESERIES TABLE
 - SHOW TABLES
+- DESCRIBE TABLE
 
 ### DML 语句
 - INSERT
@@ -81,7 +83,7 @@ tests/
 - 聚合函数 (COUNT, SUM, AVG, MAX, MIN)
 - 字符串函数 (SUBSTRING, LENGTH, CONCAT)
 - 数学函数 (ABS, CEIL, FLOOR, ROUND)
-- 时间函数 (CURRENT_TIMESTAMP, DATE_TRUNC)
+- 时间函数 (CURRENT_TIMESTAMP, DATE_TRUNC, TIME_BUCKET)
 - 移动窗口函数
 - 向量搜索函数
 
@@ -136,6 +138,9 @@ python run_tests.py --integration
 # 详细输出
 python run_tests.py --verbose
 
+# 安静模式（只显示失败）
+python run_tests.py --quiet
+
 # 列出所有测试
 python run_tests.py --list
 
@@ -144,6 +149,48 @@ python run_tests.py --coverage
 
 # 生成 HTML 覆盖率报告
 python run_tests.py --coverage-html
+
+# 生成 XML 覆盖率报告
+python run_tests.py --coverage-xml
+
+# 生成 HTML 测试报告
+python run_tests.py --report-html
+
+# 遇到第一个失败时停止
+python run_tests.py --failfast
+
+# 缓冲输出
+python run_tests.py --buffer
+
+# 显示局部变量
+python run_tests.py --locals
+
+# 排除特定测试
+python run_tests.py --exclude "slow_tests"
+```
+
+### 使用 pytest 框架
+
+测试运行器支持 pytest 框架，提供更多高级功能：
+
+```bash
+# 使用 pytest 运行测试
+python run_tests.py --pytest
+
+# 并行运行测试（需要安装 pytest-xdist）
+python run_tests.py --pytest --parallel 4
+
+# 按标记筛选测试
+python run_tests.py --pytest --marker "slow"
+
+# 设置测试超时（需要安装 pytest-timeout）
+python run_tests.py --pytest --timeout 60
+
+# pytest 模式下生成 HTML 报告（需要安装 pytest-html）
+python run_tests.py --pytest --report-html
+
+# pytest 模式下运行覆盖率（需要安装 pytest-cov）
+python run_tests.py --pytest --coverage
 ```
 
 ### 使用标准 unittest
@@ -159,8 +206,62 @@ python -m unittest tests.unit.test_data_types
 python -m unittest tests.unit.test_data_types.TestDataTypeINTEGER
 
 # 运行特定测试方法
-python -m unittest tests.unit.test_data_types.TestDataTypeINTEGER.test_integer_column_creation
+python -m unittest tests.unit.test_data_types.TestDataTypeINTEGER.test_integer_creation
 ```
+
+### 使用 pytest 直接运行
+
+```bash
+# 运行所有测试
+pytest tests/
+
+# 运行单元测试
+pytest tests/unit/
+
+# 运行特定文件
+pytest tests/unit/test_data_types.py
+
+# 详细输出
+pytest -v tests/
+
+# 并行运行
+pytest -n 4 tests/
+
+# 运行带标记的测试
+pytest -m "slow" tests/
+
+# 生成覆盖率报告
+pytest --cov=remdb --cov-report=html tests/
+```
+
+## 命令行选项
+
+测试运行器支持以下命令行选项：
+
+| 选项 | 说明 |
+|------|------|
+| `-h, --help` | 显示帮助信息 |
+| `-v, --verbose` | 详细输出 |
+| `-q, --quiet` | 安静模式（只显示失败） |
+| `--pattern PATTERN` | 测试文件匹配模式（默认：test*.py） |
+| `--start-directory DIR` | 测试发现起始目录（默认：tests） |
+| `--coverage` | 运行覆盖率测试 |
+| `--coverage-html` | 生成 HTML 覆盖率报告 |
+| `--coverage-xml` | 生成 XML 覆盖率报告 |
+| `--coverage-report` | 显示覆盖率报告 |
+| `--list` | 列出所有测试 |
+| `--failfast` | 遇到第一个失败时停止 |
+| `--buffer` | 缓冲 stdout/stderr |
+| `--locals` | 在回溯中显示局部变量 |
+| `--exclude PATTERN` | 排除测试模式（逗号分隔） |
+| `--integration` | 只运行集成测试 |
+| `--unit` | 只运行单元测试 |
+| `--pytest` | 使用 pytest 框架 |
+| `--parallel N` | 并行运行（仅 pytest，N 为工作进程数） |
+| `--marker MARKER` | 按 pytest 标记筛选 |
+| `--timeout SECONDS` | 设置测试超时（仅 pytest） |
+| `--report` | 生成测试报告 |
+| `--report-html` | 生成 HTML 测试报告 |
 
 ## 测试配置
 
@@ -269,6 +370,10 @@ python run_tests.py --coverage-html
 
 # 生成 XML 报告（用于 CI）
 python run_tests.py --coverage-xml
+
+# 使用 pytest 运行覆盖率
+pip install pytest-cov
+python run_tests.py --pytest --coverage
 ```
 
 ### 覆盖率报告
@@ -283,13 +388,34 @@ python run_tests.py --coverage-xml
 - **辅助功能**: 90%+
 - **测试工具**: 80%+
 
+## 测试报告
+
+### 生成 HTML 测试报告
+
+```bash
+# 生成 HTML 测试报告
+python run_tests.py --report-html
+
+# 报告位置
+# test_reports/test_report.html (unittest)
+# test_reports/pytest_report.html (pytest)
+```
+
+### 报告内容
+
+测试报告包含以下信息：
+- 测试总数、通过数、失败数、错误数、跳过数
+- 测试执行时间
+- 失败测试详情
+- 错误测试详情
+
 ## 性能优化
 
 ### 测试性能建议
 
 1. **使用内存高效测试**: 设置 `use_memory_efficient_testing=True`
 2. **减少测试数据量**: 在资源受限环境中使用较小的测试数据集
-3. **并行测试**: 在 CI 环境中启用并行测试
+3. **并行测试**: 使用 `--pytest --parallel N` 启用并行测试
 4. **合理设置超时**: 根据测试环境调整超时时间
 5. **避免重复设置**: 使用 setUpClass() 进行一次性设置
 
@@ -326,12 +452,21 @@ set TEST_LOGGING=1
    - 原因: 测试数据量过大
    - 解决: 减少测试数据量或使用内存高效测试
 
+5. **pytest-xdist not found**
+   - 原因: 未安装并行测试插件
+   - 解决: 运行 `pip install pytest-xdist`
+
+6. **pytest-cov not found**
+   - 原因: 未安装 pytest 覆盖率插件
+   - 解决: 运行 `pip install pytest-cov`
+
 ### 调试技巧
 
 1. **启用详细日志**: `python run_tests.py --verbose`
 2. **单独运行失败的测试**: `python -m unittest tests.unit.test_module.TestClass.test_method`
 3. **使用 pdb 调试**: 在测试代码中添加 `import pdb; pdb.set_trace()`
 4. **检查测试输出**: 查看测试输出的详细错误信息
+5. **使用 --buffer 选项**: 缓冲输出，只在失败时显示
 
 ## CI/CD 集成
 
@@ -358,11 +493,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e .[numpy,pandas]
-        pip install coverage
+        pip install coverage pytest pytest-cov pytest-xdist
     
     - name: Run tests with coverage
       run: |
-        python run_tests.py --coverage
+        python run_tests.py --pytest --coverage --parallel 2
     
     - name: Upload coverage report
       uses: codecov/codecov-action@v4
@@ -380,13 +515,13 @@ pipeline {
         stage('Install') {
             steps {
                 sh 'pip install -e .[numpy,pandas]'
-                sh 'pip install coverage'
+                sh 'pip install coverage pytest pytest-cov pytest-xdist'
             }
         }
         
         stage('Test') {
             steps {
-                sh 'python run_tests.py --coverage'
+                sh 'python run_tests.py --pytest --coverage --parallel 4'
             }
         }
         
@@ -412,6 +547,37 @@ pipeline {
 }
 ```
 
+## 依赖安装
+
+### 基本依赖
+
+```bash
+pip install -e .
+```
+
+### 测试依赖
+
+```bash
+# 覆盖率测试
+pip install coverage
+
+# pytest 框架
+pip install pytest
+
+# pytest 插件（可选）
+pip install pytest-cov        # 覆盖率
+pip install pytest-xdist      # 并行测试
+pip install pytest-timeout    # 超时控制
+pip install pytest-html       # HTML 报告
+```
+
+### 完整安装
+
+```bash
+pip install -e .[numpy,pandas]
+pip install coverage pytest pytest-cov pytest-xdist pytest-timeout pytest-html
+```
+
 ## 贡献指南
 
 ### 添加新测试
@@ -431,9 +597,10 @@ pipeline {
 
 ## 结论
 
-RemDB Python 测试框架提供了全面的测试覆盖，支持各种测试场景和环境。通过遵循本文档的指南，您可以：
+RemDB Python 测试框架提供了全面的测试覆盖，支持 unittest 和 pytest 两种框架，以及各种测试场景和环境。通过遵循本文档的指南，您可以：
 
 - 运行现有的测试套件
+- 使用 pytest 高级功能（并行测试、标记筛选等）
 - 添加新的测试用例
 - 优化测试性能
 - 集成测试到 CI/CD 系统
