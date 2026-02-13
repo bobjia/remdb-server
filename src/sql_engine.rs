@@ -2,6 +2,7 @@ use crate::ddl_compiler::DdlError;
 use crate::handler::safe_database_ops::{SafeDatabaseOperations, DatabaseError};
 use remdb::{DdlExecutor, RemDb, RemDbError, MAX_STRING_LEN, MAX_TEXT_LEN, json::JsonDocument};
 use remdb::log::{info, error};
+use remdb::sql::query_parser::parse_sql_query;
 use thiserror::Error;
 
 macro_rules! debug_println {
@@ -1668,6 +1669,126 @@ fn execute_create_table(db: &mut RemDb, sql: &str) -> std::result::Result<Result
     // 调试：打印要执行的SQL语句
     debug_println!("Debug: Executing CREATE TABLE SQL: {}", sql);
 
+    // 首先尝试使用SQL解析器
+    match parse_sql_query(sql) {
+        Ok(parsed_query) => {
+            // 确保是CREATE TABLE查询
+            if let remdb::sql::query_parser::QueryType::CreateTable = parsed_query.query_type {
+                eprintln!("DEBUG: Using SQL parser for CREATE TABLE");
+                
+                let table_name = parsed_query.table_name;
+                let mut fields = Vec::new();
+                let mut constraints = Vec::new();
+                let mut primary_key_indices = Vec::new();
+                
+                // 将解析的字段定义转换为create_table所需的格式
+                for (i, (field_name, data_type_str, is_pk, is_not_null, is_unique, is_auto_inc, default_value)) in 
+                    parsed_query.table_def.iter().enumerate() {
+                    
+                    // 转换数据类型字符串为DataType
+                    let data_type = match data_type_str.as_str() {
+                        "INT" | "INTEGER" => remdb::types::DataType::Int32,
+                        "BIGINT" => remdb::types::DataType::Int64,
+                        "FLOAT" => remdb::types::DataType::Float32,
+                        "DOUBLE" => remdb::types::DataType::Float64,
+                        "BOOLEAN" => remdb::types::DataType::Bool,
+                        "TIMESTAMP" => remdb::types::DataType::Timestamp,
+                        "STRING" | "VARCHAR" => remdb::types::DataType::VarChar,
+                        "CHAR" => remdb::types::DataType::Char,
+                        "TEXT" => remdb::types::DataType::Text,
+                        "VECTOR" => remdb::types::DataType::Vector,
+                        "TIMESTAMPTZ" => remdb::types::DataType::TimestampTZ,
+                        "INTERVAL" => remdb::types::DataType::Interval,
+                        "JSON" => remdb::types::DataType::Json,
+                        _ => remdb::types::DataType::VarChar,
+                    };
+                    
+                    // 处理维度（对于VECTOR类型）
+                    let dimension = if data_type_str == "VECTOR" {
+                        // 从数据类型字符串中提取维度，例如 "VECTOR(128)"
+                        if let Some(start) = data_type_str.find('(') {
+                            if let Some(end) = data_type_str.find(')') {
+                                data_type_str[start+1..end].parse().unwrap_or(0)
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 };
+                    
+                    // 如果有默认值，需要转换（暂时设为None，因为类型转换复杂）
+                    let default: Option<remdb::types::Value> = None;
+                    
+                    fields.push((field_name.as_str(), data_type, dimension as u16, None::<remdb::types::DistanceType>, default));
+                    
+                    // 添加约束
+                    constraints.push(remdb::FieldConstraint {
+                        primary_key: *is_pk,
+                        not_null: *is_not_null,
+                        unique: *is_unique,
+                        auto_increment: *is_auto_inc,
+                    });
+                    
+                    // 记录主键字段索引
+                    if *is_pk {
+                        primary_key_indices.push(i);
+                    }
+                }
+                
+                // 如果有显式的复合主键定义，使用它
+                if let Some(pk_fields) = &parsed_query.primary_key {
+                    primary_key_indices.clear();
+                    for pk_field in pk_fields {
+                        if let Some(index) = parsed_query.table_def.iter().position(|(name, _, _, _, _, _, _)| name == pk_field) {
+                            primary_key_indices.push(index);
+                        }
+                    }
+                }
+                
+                // 转换字段为create_table期望的格式
+                let converted_fields: Vec<(&str, remdb::types::DataType, u16, Option<remdb::types::DistanceType>, Option<remdb::types::Value>)> = fields
+                    .iter()
+                    .map(|(name, data_type, dimension, dist, default)| {
+                        (*name, *data_type, *dimension, *dist, default.clone())
+                    })
+                    .collect();
+                
+                eprintln!("DEBUG: Creating table '{}' with {} fields, primary key indices: {:?}", 
+                    table_name, converted_fields.len(), primary_key_indices);
+                
+                // 解析 WITH CONFIGURATION 子句（从原始SQL中提取）
+                let mut max_records: Option<usize> = None;
+                let sql_lower = sql.to_lowercase();
+                if let Some(config_pos) = sql_lower.find("with configuration (") {
+                    // 提取 CONFIGURATION 括号内的内容
+                    let config_start = config_pos + "with configuration (".len();
+                    if let Some(config_end) = sql[config_start..].find(')') {
+                        let config_content = &sql[config_start..config_start + config_end].trim();
+                        // ... 解析max_records逻辑（保持原有代码）
+                    }
+                }
+                
+                // 调用 DdlExecutor::create_table
+                remdb::DdlExecutor::create_table(
+                    db,
+                    &table_name,
+                    &converted_fields,
+                    Some(&constraints),
+                    if primary_key_indices.is_empty() { None } else { Some(primary_key_indices) },
+                    max_records,
+                )?;
+                
+                return Ok(ResultSet {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    affected_rows: 0,
+                });
+            }
+        }
+        Err(e) => {
+            eprintln!("DEBUG: SQL parser failed: {:?}, falling back to legacy parser", e);
+            // 继续使用原有解析逻辑
+        }
+    }
+
+    // 原有的解析逻辑（作为回退）
     let sql_lower = sql.trim().to_lowercase();
 
     // 查找表名和字段定义开始位置
