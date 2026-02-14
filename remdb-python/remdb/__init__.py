@@ -12,6 +12,7 @@ from .core import (
     RemDbPubSub,
     RemDbError,
     NotFoundError,
+    DuplicateKeyError,
     TransactionError,
     ConfigError
 )
@@ -26,6 +27,7 @@ __all__ = [
     "RemDbPubSub",
     "RemDbError",
     "NotFoundError",
+    "DuplicateKeyError",
     "TransactionError",
     "ConfigError"
 ]

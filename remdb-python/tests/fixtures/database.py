@@ -26,36 +26,36 @@ except ImportError:
 
 class BaseTestCase(unittest.TestCase):
     """Base test case for RemDB tests with support for both local and network connections"""
-    
+
     # Test configuration
     USE_NETWORK = False  # Set to True to test network connections
     NETWORK_HOST = "localhost"
     NETWORK_PORT = 6666
     NETWORK_URL = f"jdbc://{NETWORK_HOST}:{NETWORK_PORT}"
-    
+
     # Memory management
-    ENABLE_MEMORY_MONITORING = True
+    ENABLE_MEMORY_MONITORING = False
     FORCE_GC_AFTER_TEST = True
-    DELAY_AFTER_TEST = 0.1  # Small delay to allow resources to be released
-    
+    DELAY_AFTER_TEST = 0.3  # Increased delay to allow resources to be released
+
     def setUp(self):
         """Set up test environment"""
         super().setUp()
-        
+
         # Skip test if remdb is not available
         if not REMDB_AVAILABLE:
             self.skipTest("remdb module not available")
-        
+
         # Initialize resource tracking
         self.created_tables = []
         self.resources = {}
-        
+
         # Monitor memory before test
         if self.ENABLE_MEMORY_MONITORING and MEMORY_MONITORING:
             memory = psutil.virtual_memory()
             self._memory_before = memory.available
             print(f"\n[{self.__class__.__name__}.{self._testMethodName}] Memory before: {memory.available / (1024**2):.2f} MB")
-        
+
         # Create temporary file for local database if not using network
         if not self.USE_NETWORK:
             self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.rdb')
@@ -66,11 +66,19 @@ class BaseTestCase(unittest.TestCase):
         else:
             self.db_path = None
             self.connection_url = self.NETWORK_URL
-            
+
         # Connect to database
-        self.conn = remdb.connect(self.connection_url)
-        self.conn.connect()
-        self.resources['connection'] = self.conn
+        try:
+            self.conn = remdb.connect(self.connection_url)
+            self.resources['connection'] = self.conn
+        except Exception as e:
+            # Clean up temp file if connection fails
+            if hasattr(self, 'db_path') and self.db_path and os.path.exists(self.db_path):
+                try:
+                    os.unlink(self.db_path)
+                except Exception:
+                    pass
+            raise RemDbError(f"Failed to connect to database: {e}")
     
     def tearDown(self):
         """Clean up test environment with enhanced resource management"""
@@ -80,41 +88,42 @@ class BaseTestCase(unittest.TestCase):
                 try:
                     self.drop_test_table(table_name)
                 except Exception as e:
-                    print(f"Warning: Failed to drop table {table_name}: {e}")
-        
+                    pass  # Silently ignore cleanup errors
+
         # Close database connection
         if hasattr(self, 'conn') and self.conn:
             try:
                 self.conn.close()
+            except Exception:
+                pass
+            finally:
                 self.conn = None
-            except Exception as e:
-                print(f"Warning: Failed to close connection: {e}")
-        
-        # Clean up temporary file for local database
-        if hasattr(self, 'db_path') and not self.USE_NETWORK and self.db_path and os.path.exists(self.db_path):
-            try:
-                os.unlink(self.db_path)
-            except Exception as e:
-                print(f"Warning: Failed to delete temporary file: {e}")
-        
+
         # Clear resource tracking
         if hasattr(self, 'resources'):
             self.resources.clear()
-        
+
         # Clear created tables list
         if hasattr(self, 'created_tables'):
             self.created_tables.clear()
-        
-        # Force garbage collection
+
+        # Force garbage collection BEFORE file cleanup
+        gc.collect()
+        if self.DELAY_AFTER_TEST:
+            time.sleep(self.DELAY_AFTER_TEST)
+
+        # Clean up temporary file for local database AFTER gc
+        if hasattr(self, 'db_path') and not self.USE_NETWORK and self.db_path:
+            try:
+                if os.path.exists(self.db_path):
+                    os.unlink(self.db_path)
+            except Exception:
+                pass  # Silently ignore file cleanup errors
+
+        # Second garbage collection to catch any remaining cycles
         if self.FORCE_GC_AFTER_TEST:
-            # First garbage collection
             gc.collect()
-            # Small delay to allow resources to be released
-            if self.DELAY_AFTER_TEST:
-                time.sleep(self.DELAY_AFTER_TEST)
-            # Second garbage collection to catch any remaining cycles
-            gc.collect()
-        
+
         # Monitor memory after test
         if self.ENABLE_MEMORY_MONITORING and MEMORY_MONITORING and hasattr(self, '_memory_before'):
             memory = psutil.virtual_memory()
@@ -125,7 +134,7 @@ class BaseTestCase(unittest.TestCase):
                 print(f"[{self.__class__.__name__}.{self._testMethodName}] Memory freed: {memory_diff:.2f} MB")
             else:
                 print(f"[{self.__class__.__name__}.{self._testMethodName}] Memory used: {abs(memory_diff):.2f} MB")
-        
+
         super().tearDown()
         
     def create_test_table(self, table_name: str, schema: str):
@@ -213,22 +222,24 @@ class BaseTestCase(unittest.TestCase):
         if value is None:
             return "NULL"
         elif isinstance(value, str):
-            # Escape single quotes
-            escaped = value.replace("'", "''")
+            # Escape single quotes and double quotes with backslashes
+            escaped = value.replace("'", "\\'").replace('"', '\\"')
             return f"'{escaped}'"
         elif isinstance(value, bool):
             return "TRUE" if value else "FALSE"
         elif isinstance(value, (int, float)):
             return str(value)
         else:
-            # Convert to string and escape
-            escaped = str(value).replace("'", "''")
+            # Convert to string and escape single quotes and double quotes with backslashes
+            escaped = str(value).replace("'", "\\'").replace('"', '\\"')
             return f"'{escaped}'"
 
 
 class LocalTestCase(BaseTestCase):
     """Test case for local database connections"""
     USE_NETWORK = False
+    FORCE_GC_AFTER_TEST = True  # Enable GC to help with resource cleanup
+    DELAY_AFTER_TEST = 0.2  # Small delay between tests
 
 
 class NetworkTestCase(BaseTestCase):

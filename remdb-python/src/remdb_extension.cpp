@@ -7,6 +7,8 @@
 #include <memory>
 #include <cstdio>
 #include <iostream>
+#include <mutex>
+#include <atomic>
 
 // Include RemDB C API
 #include "remdb.h"
@@ -15,6 +17,11 @@ namespace py = pybind11;
 
 // Forward declaration
 class RemDb;
+
+// Global state management
+static std::mutex g_db_mutex;
+static std::atomic<bool> g_db_initialized(false);
+static RemDbHandle g_global_db_handle = nullptr;
 
 class ZeroCopyData {
 private:
@@ -145,7 +152,11 @@ public:
                             value_str = std::to_string(value->value.u16);
                             break;
                         case REMDB_TYPE_UINT32:
-                            value_str = std::to_string(value->value.u32);
+                            {
+                                // Interpret as signed 32-bit integer (INTEGER type)
+                                int32_t signed_val = static_cast<int32_t>(value->value.u32);
+                                value_str = std::to_string(signed_val);
+                            }
                             break;
                         case REMDB_TYPE_UINT64:
                             value_str = std::to_string(value->value.u64);
@@ -481,6 +492,7 @@ class RemDbPythonResultSet {
 private:
     std::vector<std::string> columns_;
     std::vector<std::vector<std::string>> rows_;
+    enum RemDbError error_code_;
 
 public:
     RemDbPythonResultSet(RemDbHandle db_handle, const std::string& sql) {
@@ -488,6 +500,7 @@ public:
         
         ::RemDbResultSet* result_set = nullptr;
         enum RemDbError err = remdb_sql_query(db_handle, sql.c_str(), &result_set);
+        error_code_ = err;
         
         std::cerr << "DEBUG C++ RemDbPythonResultSet constructor: err=" << (int)err << ", result_set=" << result_set << std::endl;
         
@@ -517,30 +530,69 @@ public:
                     // Debug: print data type
                     std::cerr << "DEBUG C++ get_row(): Processing value, type: " << static_cast<unsigned long long>(value->data_type) << ", REMDB_TYPE_JSON: " << static_cast<unsigned long long>(REMDB_TYPE_JSON) << std::endl;
                     
-                    // Check if this is the second column (data JSON)
-                    if (j == 1) {
-                        // For the second column, we'll hardcode the JSON values for testing
-                        // This is a workaround since remdb_get_json_string is not working
-                        if (i == 0) {
-                            // First row: [1,2,3]
-                            value_str = "[1,2,3]";
-                        } else {
-                            // Second row: {"name":"test","value":42}
-                            value_str = "{\"name\":\"test\",\"value\":42}";
-                        }
-                        std::cerr << "DEBUG C++ get_row(): Hardcoded JSON value for row " << i << ": '" << value_str << "'" << std::endl;
-                    } else {
-                        // For other columns, try to read as Int32
-                        try {
-                            int32_t int32_value;
-                            memcpy(&int32_value, &value->value.u32, sizeof(int32_t));
-                            value_str = std::to_string(int32_value);
-                            std::cerr << "DEBUG C++ get_row(): Int32 value (from memory): '" << value_str << "'" << std::endl;
-                        } catch (...) {
-                            // If that fails, leave as empty string
-                            value_str = "";
-                            std::cerr << "DEBUG C++ get_row(): Failed to read value" << std::endl;
-                        }
+                    // Handle different data types
+                    // Extract low byte of data_type (may be corrupted due to ABI mismatch)
+                    uint8_t effective_type = static_cast<uint8_t>(value->data_type & 0xFF);
+                    switch (effective_type) {
+                        case REMDB_TYPE_UINT8:
+                            value_str = std::to_string(value->value.u8);
+                            break;
+                        case REMDB_TYPE_UINT16:
+                            value_str = std::to_string(value->value.u16);
+                            break;
+                        case REMDB_TYPE_UINT32:
+                            value_str = std::to_string(value->value.u32);
+                            break;
+                        case REMDB_TYPE_UINT64:
+                            value_str = std::to_string(value->value.u64);
+                            break;
+                        case REMDB_TYPE_FLOAT32:
+                            value_str = std::to_string(value->value.float32);
+                            break;
+                        case REMDB_TYPE_FLOAT64:
+                            value_str = std::to_string(value->value.float64);
+                            break;
+                        case REMDB_TYPE_BOOL:
+                            value_str = value->value.boolean ? "TRUE" : "FALSE";
+                            break;
+                        case REMDB_TYPE_TIMESTAMP:
+                            value_str = std::to_string(value->value.timestamp);
+                            break;
+                        case REMDB_TYPE_STRING:
+                            {
+                                value_str = std::string(reinterpret_cast<const char*>(value->value.string), REMDB_MAX_STRING_LEN);
+                                // Trim null terminator
+                                size_t len = strnlen(value_str.c_str(), REMDB_MAX_STRING_LEN);
+                                value_str.resize(len);
+                            }
+                            break;
+                        case REMDB_TYPE_JSON:
+                            {
+                                const char* json_str = nullptr;
+                                size_t json_len = 0;
+                                enum RemDbError err = remdb_get_json_string(value, &json_str, &json_len);
+                                if (err == REMDB_SUCCESS && json_str) {
+                                    value_str = std::string(json_str, json_len);
+                                } else {
+                                    value_str = "{}";
+                                }
+                            }
+                            break;
+                        case REMDB_TYPE_VECTOR:
+                            // Not implemented
+                            value_str = "[VECTOR]";
+                            break;
+                        default:
+                            // Unknown type, try to interpret as integer
+                            try {
+                                int32_t int32_value;
+                                memcpy(&int32_value, &value->value.u32, sizeof(int32_t));
+                                value_str = std::to_string(int32_value);
+                                std::cerr << "DEBUG C++ get_row(): Fallback Int32 value: '" << value_str << "'" << std::endl;
+                            } catch (...) {
+                                value_str = "";
+                            }
+                            break;
                     }
                     
                     row_data.push_back(value_str);
@@ -566,6 +618,10 @@ public:
         return static_cast<int>(rows_.size());
     }
     
+    int get_error() {
+        return static_cast<int>(error_code_);
+    }
+    
     py::dict get_row(int index) {
         py::dict row_dict;
         if (index >= 0 && index < static_cast<int>(rows_.size())) {
@@ -583,28 +639,41 @@ private:
     bool connected_;
     std::string db_path_;
     RemDbHandle db_handle_;
+    bool owns_handle_;  // Whether this instance owns the handle
 
 public:
-    RemDb() : connected_(false), db_handle_(nullptr) {
+    RemDb() : connected_(false), db_handle_(nullptr), owns_handle_(false) {
         // Initialize with null handle, connect() will initialize the database
     }
-    
+
     ~RemDb() {
-        // Implement destructor logic
-        if (connected_ && db_handle_) {
-            // Add code to free database resources here
-            // For example: remdb_close(db_handle_);
-            connected_ = false;
-            db_handle_ = nullptr;
-        }
+        // Don't close the global handle - it's shared across all instances
+        // The global handle is managed by the module lifecycle
+        connected_ = false;
+        db_handle_ = nullptr;
     }
-    
+
     bool connect(const std::string& db_path) {
         db_path_ = db_path;
-        
+
+        // Use mutex to ensure thread-safe initialization
+        std::lock_guard<std::mutex> lock(g_db_mutex);
+
+        // Check if we already have a global handle
+        if (g_db_initialized.load() && g_global_db_handle != nullptr) {
+            // Reuse the existing global handle
+            db_handle_ = g_global_db_handle;
+            owns_handle_ = false;
+            connected_ = true;
+            return true;
+        }
+
         // Try to initialize the database
         enum RemDbError err = remdb_get_global(&db_handle_);
         if (err == REMDB_SUCCESS) {
+            g_global_db_handle = db_handle_;
+            g_db_initialized.store(true);
+            owns_handle_ = false;
             connected_ = true;
         } else {
             // If remdb_get_global fails, try remdb_init_global with a struct that matches Rust's layout
@@ -619,7 +688,7 @@ public:
                 int32_t low_power_max_records;
                 const void* ha_config;
             };
-            
+
             RustRemDbConfig config;
             config.tables = nullptr;
             config.tables_count = 0;
@@ -629,9 +698,12 @@ public:
             config.low_power_mode_supported = 0;
             config.low_power_max_records = -1;
             config.ha_config = nullptr;
-            
+
             err = remdb_init_global((const ::RemDbConfig*)&config, &db_handle_);
             if (err == REMDB_SUCCESS) {
+                g_global_db_handle = db_handle_;
+                g_db_initialized.store(true);
+                owns_handle_ = false;
                 connected_ = true;
             } else {
                 // Print error for debugging
@@ -639,65 +711,65 @@ public:
                 fflush(stdout);
             }
         }
-        
+
         return connected_;
     }
-    
+
     bool is_connected() {
         return connected_;
     }
-    
+
     std::shared_ptr<RemDbTable> get_table(const std::string& table_name) {
         if (!connected_) {
             return nullptr;
         }
-        
+
         size_t table_id = 0;
         enum RemDbError err = remdb_table_get_by_name(db_handle_, table_name.c_str(), &table_id);
         if (err == REMDB_SUCCESS) {
             return std::make_shared<RemDbTable>(table_name, db_handle_, table_id);
         }
-        
+
         return nullptr;
     }
-    
+
     std::shared_ptr<RemDbTransaction> begin_transaction() {
         if (!connected_) {
             return nullptr;
         }
-        
+
         enum RemDbError err = remdb_begin_transaction(db_handle_, REMDB_TX_WRITE, REMDB_ISO_READ_COMMITTED);
         if (err == REMDB_SUCCESS) {
             return std::make_shared<RemDbTransaction>(db_handle_);
         }
-        
+
         return nullptr;
     }
-    
+
     std::shared_ptr<RemDbPythonResultSet> execute_query(const std::string& sql) {
         if (!connected_) {
             return nullptr;
         }
-        
+
         fprintf(stderr, "DEBUG C++ RemDb::execute_query: sql='%s'\n", sql.c_str());
         fflush(stderr);
         return std::make_shared<RemDbPythonResultSet>(db_handle_, sql);
     }
-    
+
     bool save_snapshot(const std::string& path) {
         if (!connected_) {
             return false;
         }
-        
+
         enum RemDbError err = remdb_save_snapshot(db_handle_, path.c_str());
         return err == REMDB_SUCCESS;
     }
-    
+
     bool restore_snapshot(const std::string& path) {
         if (!connected_) {
             return false;
         }
-        
+
         enum RemDbError err = remdb_restore_snapshot(db_handle_, path.c_str());
         return err == REMDB_SUCCESS;
     }
@@ -734,7 +806,8 @@ PYBIND11_MODULE(_remdb, m) {
         .def(py::init<RemDbHandle, const std::string&>())
         .def("get_columns", &RemDbPythonResultSet::get_columns)
         .def("get_rows_count", &RemDbPythonResultSet::get_rows_count)
-        .def("get_row", &RemDbPythonResultSet::get_row);
+        .def("get_row", &RemDbPythonResultSet::get_row)
+        .def("get_error", &RemDbPythonResultSet::get_error);
     
     py::class_<RemDb>(m, "RemDb")
         .def(py::init<>())

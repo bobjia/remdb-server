@@ -23,6 +23,10 @@ class NotFoundError(RemDbError):
     """Record not found error"""
     pass
 
+class DuplicateKeyError(RemDbError):
+    """Duplicate key error"""
+    pass
+
 class TransactionError(RemDbError):
     """Transaction error"""
     pass
@@ -30,6 +34,11 @@ class TransactionError(RemDbError):
 class ConfigError(RemDbError):
     """Configuration error"""
     pass
+
+REMDB_ERROR_DUPLICATE_KEY = 3
+REMDB_ERROR_RECORD_NOT_FOUND = 2
+REMDB_ERROR_FIELD_NOT_FOUND = 4
+REMDB_ERROR_TYPE_MISMATCH = 5
 
 # JSON值包装类
 class JsonValue:
@@ -198,9 +207,9 @@ class RemDbConnection:
         if not self.connected:
             raise RemDbError("Not connected to database")
 
-        # 处理 COUNT(*) 查询
+        # 处理 COUNT(*) 查询 (only when no WHERE clause)
         import re
-        count_match = re.search(r'SELECT\s+COUNT\(\*\)\s+FROM\s+([a-zA-Z0-9_]+)', sql, re.IGNORECASE)
+        count_match = re.search(r'SELECT\s+COUNT\(\*\)\s+FROM\s+([a-zA-Z0-9_]+)\s*$', sql, re.IGNORECASE)
         if count_match and not self.is_network_connection:
             # 提取表名
             table_name = count_match.group(1)
@@ -1497,6 +1506,16 @@ class RemDbResultSet:
             result_set: Underlying result set object
         """
         self.result_set = result_set
+        self.error_code = self.result_set.get_error()
+        
+        if self.error_code != 0:
+            if self.error_code == REMDB_ERROR_DUPLICATE_KEY:
+                raise DuplicateKeyError("Duplicate key error")
+            elif self.error_code == REMDB_ERROR_RECORD_NOT_FOUND:
+                raise NotFoundError("Record not found")
+            else:
+                raise RemDbError(f"Database error code: {self.error_code}")
+        
         self.columns = self.result_set.get_columns()
         self.rows_count = self.result_set.get_rows_count()
         self.current_row = 0
@@ -1545,7 +1564,37 @@ class RemDbResultSet:
             Dictionary of row values
         """
         values = self.result_set.get_row(row_index)
-        return values
+        # Fix negative integers that are returned as unsigned integers
+        fixed_values = {}
+        for key, value in values.items():
+            # Handle boolean values
+            if isinstance(value, str) and value.upper() in ('TRUE', 'FALSE'):
+                fixed_values[key] = value.upper() == 'TRUE'
+            # Handle both string and numeric cases
+            elif isinstance(value, (int, float, str)):
+                try:
+                    # First try to convert to float
+                    float_value = float(value)
+                    # Check if it's a whole number that should be an integer
+                    if float_value.is_integer():
+                        # Convert to integer
+                        int_value = int(float_value)
+                        # Check if this is a 32-bit integer that should be negative
+                        # Only apply this fix to integers that are within the 32-bit range
+                        if 2**31 <= int_value < 2**32:
+                            # Convert from unsigned 32-bit to signed 32-bit
+                            int_value = int_value - 2**32
+                        fixed_values[key] = int_value
+                    else:
+                        # Keep as float
+                        fixed_values[key] = float_value
+                except (ValueError, TypeError):
+                    # Not a number, keep as is
+                    fixed_values[key] = value
+            else:
+                # Not a number, keep as is
+                fixed_values[key] = value
+        return fixed_values
 
     def to_dataframe(self):
         """

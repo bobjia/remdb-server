@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build --release)",
+      "Bash(pip install -e .)",
+      "Bash(python setup.py build_ext --inplace)",
+      "Bash(python -m pytest tests/unit/ -v)",
+      "Bash(python -m pytest tests/unit/ -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_data_types.py -v --tb=short -x)",
+      "Bash(python -m pytest tests/unit/ --tb=short)",
+      "Bash(python -m pytest tests/unit/ --tb=short -q)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(timeout 180 python -m pytest tests/unit/ --tb=short -q --timeout=30)",
+      "Bash(python -m pytest tests/unit/test_data_types.py -q --tb=short)",
+      "Bash(python -m pytest tests/unit/test_data_types.py::TestDataTypeINTEGER -q --tb=short)",
+      "Bash(python -m pytest tests/unit/test_ddl.py --tb=long -v)",
+      "Bash(python -m pytest tests/unit/test_ddl.py::TestCreateTable::test_create_table_error_duplicate --tb=long -v)",
+      "Bash(python -m pytest tests/unit/test_ddl.py::TestCreateTable::test_create_table_with_constraints --tb=short -v)",
+      "Bash(python -m pytest tests/unit/test_ddl.py::TestCreateTable::test_create_table_with_index_definition --tb=short -v)",
+      "Bash(python -m pytest tests/unit/test_ddl.py::TestAlterTable --tb=short -v)",
+      "Bash(python -m pytest tests/unit/test_ddl.py -q --tb=short)",
+      "Bash(python -m pytest tests/unit/test_ddl.py -v --tb=short)",
+      "Bash(python -m pytest tests/unit/ -q --tb=line)",
+      "Bash(python -m pytest tests/unit/test_ddl.py tests/unit/test_data_types.py -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_ddl.py -v)",
+      "Bash(python -m pytest tests/unit/ -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_dml.py -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement::test_insert_basic tests/unit/test_dml.py::TestInsertStatement::test_insert_multiple_rows tests/unit/test_dml.py::TestInsertStatement::test_insert_error_duplicate_primary_key -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement::test_insert_without_column_list -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement::test_insert_basic tests/unit/test_dml.py::TestInsertStatement::test_insert_multiple_rows tests/unit/test_dml.py::TestInsertStatement::test_insert_error_duplicate_primary_key tests/unit/test_dml.py::TestInsertStatement::test_insert_error_not_null_constraint tests/unit/test_dml.py::TestInsertStatement::test_insert_with_default_values tests/unit/test_dml.py::TestInsertStatement::test_insert_with_null_values tests/unit/test_dml.py::TestInsertStatement::test_insert_without_column_list -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_dml.py -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement tests/unit/test_dml.py::TestSelectStatement::test_select_all_columns tests/unit/test_dml.py::TestSelectStatement::test_select_specific_columns tests/unit/test_dml.py::TestSelectStatement::test_select_with_where_clause -v --tb=line)"
+    ]
+  }
+}
