@@ -21,6 +21,7 @@ class RemDb;
 // Global state management
 static std::mutex g_db_mutex;
 static std::atomic<bool> g_db_initialized(false);
+static std::atomic<bool> g_thread_pool_initialized(false);
 static RemDbHandle g_global_db_handle = nullptr;
 
 class ZeroCopyData {
@@ -665,6 +666,11 @@ public:
             db_handle_ = g_global_db_handle;
             owns_handle_ = false;
             connected_ = true;
+            // Ensure thread pool is initialized for CREATE INDEX support
+            if (!g_thread_pool_initialized.load()) {
+                remdb_init_index_build_thread_pool(4);
+                g_thread_pool_initialized.store(true);
+            }
             return true;
         }
 
@@ -675,6 +681,11 @@ public:
             g_db_initialized.store(true);
             owns_handle_ = false;
             connected_ = true;
+            // Ensure thread pool is initialized for CREATE INDEX support
+            if (!g_thread_pool_initialized.load()) {
+                remdb_init_index_build_thread_pool(4);
+                g_thread_pool_initialized.store(true);
+            }
         } else {
             // If remdb_get_global fails, try remdb_init_global with a struct that matches Rust's layout
             // Create a struct that matches the Rust RemDbConfig layout exactly
@@ -705,6 +716,9 @@ public:
                 g_db_initialized.store(true);
                 owns_handle_ = false;
                 connected_ = true;
+                // Initialize the index build thread pool for CREATE INDEX support
+                remdb_init_index_build_thread_pool(4);
+                g_thread_pool_initialized.store(true);
             } else {
                 // Print error for debugging
                 printf("Both remdb_get_global and remdb_init_global failed with error code: %d\n", err);

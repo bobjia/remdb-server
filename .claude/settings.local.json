@@ -31,7 +31,12 @@
       "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement -v --tb=line)",
       "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement::test_insert_basic tests/unit/test_dml.py::TestInsertStatement::test_insert_multiple_rows tests/unit/test_dml.py::TestInsertStatement::test_insert_error_duplicate_primary_key tests/unit/test_dml.py::TestInsertStatement::test_insert_error_not_null_constraint tests/unit/test_dml.py::TestInsertStatement::test_insert_with_default_values tests/unit/test_dml.py::TestInsertStatement::test_insert_with_null_values tests/unit/test_dml.py::TestInsertStatement::test_insert_without_column_list -v --tb=line)",
       "Bash(python -m pytest tests/unit/test_dml.py -v --tb=line)",
-      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement tests/unit/test_dml.py::TestSelectStatement::test_select_all_columns tests/unit/test_dml.py::TestSelectStatement::test_select_specific_columns tests/unit/test_dml.py::TestSelectStatement::test_select_with_where_clause -v --tb=line)"
+      "Bash(python -m pytest tests/unit/test_dml.py::TestInsertStatement tests/unit/test_dml.py::TestSelectStatement::test_select_all_columns tests/unit/test_dml.py::TestSelectStatement::test_select_specific_columns tests/unit/test_dml.py::TestSelectStatement::test_select_with_where_clause -v --tb=line)",
+      "Bash(python -m pytest tests/unit/test_dml.py::TestSelectStatement::test_select_with_group_by -v --tb=long)",
+      "Bash(cargo test --lib check_layout -- --nocapture)",
+      "Bash(python -m pytest tests/unit/ --tb=no -q)",
+      "Bash(python -m pytest tests/unit/ -q)",
+      "Bash(python -m pytest tests/unit/test_indexes.py -v --tb=short)"
     ]
   }
 }
