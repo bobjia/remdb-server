@@ -262,3 +262,17 @@ Server uses TOML config files (`remdb-master.toml`, `remdb-slave.toml`). Key sec
 - **Zero-copy**: `RecordRef` provides zero-copy read views into table memory. The network layer has a `zero_copy_transport` module.
 - **Platform abstraction**: The `Platform` trait allows remdb to run on bare metal (no_std) or POSIX. The server uses the POSIX implementation.
 - **Error handling**: `RemDbError` in remdb (thiserror), `ServerError` in remdb-server (thiserror).
+
+## Panic-Free Requirement
+
+**Panic is not allowed anywhere in the codebase.** The following are strictly forbidden:
+
+- `unwrap()` / `expect()` / `unwrap_unchecked()` / `unwrap_or_default()` on `Result` or `Option`
+- `panic!()` / `todo!()` / `unreachable!()` / `unimplemented!()`
+- `assert!()` / `debug_assert!()` (use `if`-based checks with `?` instead)
+- `[i]` indexing on `Vec`, `[T]`, or `[T; N]` without explicit bounds check (use `.get(i)` / `.get_mut(i)` and handle the `None` case)
+- `[i..j]` slicing that could fail (validate bounds first)
+- Integer overflow that would panic (use `checked_*` / `wrapping_*` / `saturating_*` as appropriate)
+- `mem::uninitialized()` / `transmute()` that could produce invalid state
+
+Always propagate errors with `?` or handle them explicitly. Every match on `Result` or `Option` must handle the error/`None` arm — do not use `if let Ok(v)` as a substitute for full match (it silently drops the error).
