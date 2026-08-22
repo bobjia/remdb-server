@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use warp::Filter;
 
 use remdb::RemDb;
@@ -8,6 +7,7 @@ use crate::milvus::auth;
 use crate::milvus::catalog::MilvusCatalog;
 use crate::milvus::handler;
 
+/// Milvus-compatible RESTful API server
 pub struct MilvusServer {
     db: Arc<Mutex<&'static mut RemDb>>,
     port: u16,
@@ -25,27 +25,35 @@ impl MilvusServer {
 
     pub async fn start(&self) {
         let catalog = Arc::new(MilvusCatalog::new(self.db.clone()));
+        // Initialize catalog
         if let Err(e) = catalog.init().await {
             tracing::error!("Failed to init Milvus catalog: {:?}", e);
             return;
         }
 
+        // Build auth filter (or no-op if no api_key configured)
         let auth = if let Some(ref key) = self.api_key {
             let hash = auth::hash_api_key(key);
             auth::auth_filter(hash).boxed()
         } else {
-            warp::any().map(|| ()).boxed()
+            // No auth required - use a filter with the same error type
+            warp::any()
+                .and_then(|| async move { Ok::<_, warp::Rejection>(()) })
+                .map(|_: ()| ())
+                .untuple_one()
+                .boxed()
         };
 
-        let catalog_filter = warp::any().map(move || catalog.clone());
+        let catalog_filter = warp::any().map(move || catalog.clone()).boxed();
 
+        // ── Collection routes ──
         let create_collection = warp::path!("v2" / "vectordb" / "collections" / "create")
             .and(warp::post())
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_create_collection(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_create_collection(catalog, body).await
             });
 
         let drop_collection = warp::path!("v2" / "vectordb" / "collections" / "drop")
@@ -53,16 +61,16 @@ impl MilvusServer {
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_drop_collection(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_drop_collection(catalog, body).await
             });
 
         let list_collections = warp::path!("v2" / "vectordb" / "collections" / "list")
             .and(warp::get())
             .and(auth.clone())
             .and(catalog_filter.clone())
-            .then(|catalog: Arc<MilvusCatalog>| async move {
-                handler::handle_list_collections(&catalog).await
+            .and_then(|catalog: Arc<MilvusCatalog>| async move {
+                handler::handle_list_collections(catalog).await
             });
 
         let describe_collection = warp::path!("v2" / "vectordb" / "collections" / "describe")
@@ -70,8 +78,8 @@ impl MilvusServer {
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_describe_collection(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_describe_collection(catalog, body).await
             });
 
         let has_collection = warp::path!("v2" / "vectordb" / "collections" / "has")
@@ -79,79 +87,75 @@ impl MilvusServer {
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_has_collection(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_has_collection(catalog, body).await
             });
 
-        let db_filter = warp::any().map(move || self.db.clone());
+        // ── Entity routes ──
+        // Entity handlers access the database through the catalog
 
         let insert = warp::path!("v2" / "vectordb" / "entities" / "insert")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_insert(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_insert(catalog, body).await
             });
 
         let upsert = warp::path!("v2" / "vectordb" / "entities" / "upsert")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_upsert(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_upsert(catalog, body).await
             });
 
         let delete = warp::path!("v2" / "vectordb" / "entities" / "delete")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_delete(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_delete(catalog, body).await
             });
 
         let get = warp::path!("v2" / "vectordb" / "entities" / "get")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_get(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_get(catalog, body).await
             });
 
         let query = warp::path!("v2" / "vectordb" / "entities" / "query")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_query(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_query(catalog, body).await
             });
 
         let search = warp::path!("v2" / "vectordb" / "entities" / "search")
             .and(warp::post())
             .and(auth.clone())
-            .and(db_filter.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|db: Arc<Mutex<&'static mut RemDb>>, catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_search(db, &catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_search(catalog, body).await
             });
 
+        // ── Index routes ──
         let create_index = warp::path!("v2" / "vectordb" / "indexes" / "create")
             .and(warp::post())
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_create_index(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_create_index(catalog, body).await
             });
 
         let drop_index = warp::path!("v2" / "vectordb" / "indexes" / "drop")
@@ -159,10 +163,11 @@ impl MilvusServer {
             .and(auth.clone())
             .and(catalog_filter.clone())
             .and(warp::body::json())
-            .then(|catalog: Arc<MilvusCatalog>, body| async move {
-                handler::handle_drop_index(&catalog, body).await
+            .and_then(|catalog: Arc<MilvusCatalog>, body| async move {
+                handler::handle_drop_index(catalog, body).await
             });
 
+        // Combine all routes
         let routes = create_collection
             .or(drop_collection)
             .or(list_collections)
