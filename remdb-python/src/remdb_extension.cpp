@@ -409,8 +409,8 @@ public:
     std::vector<std::pair<std::string, double>> vector_search(const std::string& field_name, const std::vector<double>& query_vector, int k) {
         std::vector<std::pair<std::string, double>> results;
         
-        // Build SQL SELECT statement
-        std::string sql = "SELECT *, DISTANCE(" + field_name + ", [";
+        // Build SQL SELECT statement with vector L2 distance operator
+        std::string sql = "SELECT *, " + field_name + " <-> [";
         
         for (size_t i = 0; i < query_vector.size(); i++) {
             if (i > 0) {
@@ -419,7 +419,7 @@ public:
             sql += std::to_string(query_vector[i]);
         }
         
-        sql += ") AS distance FROM " + table_name_ + " ORDER BY distance LIMIT " + std::to_string(k);
+        sql += "] AS distance FROM " + table_name_ + " ORDER BY distance LIMIT " + std::to_string(k);
         
         ::RemDbResultSet* result_set = nullptr;
         enum RemDbError err = remdb_sql_query(db_handle_, sql.c_str(), &result_set);
@@ -648,10 +648,20 @@ public:
     }
 
     ~RemDb() {
-        // Don't close the global handle - it's shared across all instances
-        // The global handle is managed by the module lifecycle
-        connected_ = false;
-        db_handle_ = nullptr;
+        close();
+    }
+
+    bool close() {
+        std::lock_guard<std::mutex> lock(g_db_mutex);
+        if (connected_ && g_global_db_handle != nullptr) {
+            // Reset global state
+            g_db_initialized.store(false);
+            g_global_db_handle = nullptr;
+            connected_ = false;
+            db_handle_ = nullptr;
+            return true;
+        }
+        return false;
     }
 
     bool connect(const std::string& db_path) {
@@ -826,6 +836,7 @@ PYBIND11_MODULE(_remdb, m) {
     py::class_<RemDb>(m, "RemDb")
         .def(py::init<>())
         .def("connect", &RemDb::connect)
+        .def("close", &RemDb::close)
         .def("is_connected", &RemDb::is_connected)
         .def("get_table", &RemDb::get_table)
         .def("begin_transaction", &RemDb::begin_transaction)
@@ -838,5 +849,12 @@ PYBIND11_MODULE(_remdb, m) {
     
     m.def("test", []() {
         return "RemDB Python bindings initialized successfully!";
+    });
+    
+    m.def("reset_global_state", []() {
+        std::lock_guard<std::mutex> lock(g_db_mutex);
+        g_db_initialized.store(false);
+        g_thread_pool_initialized.store(false);
+        g_global_db_handle = nullptr;
     });
 }
