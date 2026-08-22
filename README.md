@@ -1,6 +1,6 @@
 # remdb-server
 
-remdb-server 是一个基于 remdb 库构建的基于全流程零拷贝的高并发高性能轻量级数据库服务器，支持 JDBC 连接、DDL 编译、快照管理、PubSub 功能和高可用配置。
+remdb-server 是一个基于 remdb 库构建的基于全流程零拷贝的高并发高性能轻量级数据库服务器，支持 JDBC 连接、DDL 编译、快照管理、PubSub 功能、高可用配置、Milvus 兼容 RESTful API 和 ONNX 模型推理。
 
 ## 功能特性
 
@@ -11,6 +11,9 @@ remdb-server 是一个基于 remdb 库构建的基于全流程零拷贝的高并
 - **快照管理**：支持从快照目录加载数据，实现数据持久化
 - **交互式 CLI**：提供命令行界面，方便直接操作数据库
 - **数据导出**：支持导出 DDL、表数据和全部数据
+- **Milvus 兼容 RESTful API**：兼容 Milvus v2.x RESTful API 协议，支持向量数据库操作
+- **Python 绑定**：提供完整的 Python 绑定（remdb-python），支持 NumPy/Pandas 集成
+- **ONNX 模型推理**：支持 ONNX 运行时模型加载和推理，可作为 SQL UDF 调用
 
 ### 高级功能
 - **高可用配置**：支持主从复制，提供数据冗余和故障转移
@@ -42,6 +45,9 @@ remdb-server 是一个基于 remdb 库构建的基于全流程零拷贝的高并
 ### 前提条件
 - Rust 编译器（版本 1.70+）
 - Cargo 包管理器
+- Python 3.8+（可选，用于 Python 绑定）
+- Java 8+（可选，用于 JDBC 驱动）
+- Maven 3.6+（可选，用于编译 JDBC 驱动）
 
 ### 构建步骤
 
@@ -50,12 +56,12 @@ remdb-server 是一个基于 remdb 库构建的基于全流程零拷贝的高并
 3. 执行构建命令
 
 ```bash
-git clone https://gitee.com/totaltrust/remdb-server
+git clone https://github.com/bobjia/remdb-server
 cd remdb-server
 cargo build --release
 ```
 
-构建完成后，可执行文件将位于 `target/release/remdb-server`。
+构建完成后，可执行文件将位于 `target/release/remdb-server` 和 `target/release/remdbcli`。
 
 ## 运行和配置
 
@@ -87,6 +93,9 @@ cargo build --release
 |      | `--snapshot_interval` | 增量快照周期（秒） |
 |      | `--max_incremental_snapshots` | 最大增量快照数量 |
 | `-d` | `--debug` | 是否开启调试模式 |
+|      | `--milvus_enabled` | 是否启用 Milvus RESTful API 服务 |
+|      | `--milvus_port` | Milvus RESTful API 监听端口（默认 19530） |
+|      | `--milvus_api_key` | Milvus RESTful API 认证密钥 |
 |      | `--non_interactive` | 非交互式模式（初始化后退出） |
 |      | `--test_export` | 测试导出功能 |
 |      | `--jdbc_port` | JDBC 监听端口 |
@@ -189,6 +198,15 @@ heartbeat_interval = 1000
 failure_detection_ms = 5000
 # 同步超时时间（毫秒）
 sync_timeout_ms = 2000
+
+# Milvus 兼容 RESTful API 配置
+[milvus]
+# 是否启用 Milvus RESTful API 服务
+enabled = false
+# 监听端口（默认 19530）
+port = 19530
+# 认证密钥（可选）
+api_key = "your-api-key"
 ```
 
 ## 使用示例
@@ -558,6 +576,23 @@ MIT License
 
 ## 版本历史
 
+### v0.3.0
+- 新增 Milvus 兼容 RESTful API 服务（v2.x 风格）
+- 新增 Python 绑定（remdb-python）支持
+- 新增 ONNX 模型推理支持
+- 新增零拷贝网络传输层
+- 新增高性能连接池
+- 新增动态系统调优
+- 新增 Prometheus 性能监控
+- 大幅提升 JDBC 服务性能和并发能力
+
+### v0.2.0
+- 新增 JDBC 认证支持
+- 新增快照导出功能
+- 新增基准测试框架
+- 优化 WAL 恢复机制
+- 改进错误处理和日志记录
+
 ### v0.1.0
 - 初始版本
 - 支持 JDBC 连接
@@ -709,6 +744,48 @@ jdbc:remdb://host:port
 
 **注意**：密码哈希使用SHA-256算法生成，示例中的默认密码为"password"，其SHA-256哈希值为"8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
 
-## 致谢
+### 8. Milvus 兼容 RESTful API 服务
 
-感谢 remdb 库的开发者，以及所有为项目做出贡献的开发者。
+remdb-server 提供了兼容 Milvus v2.x RESTful API 协议的向量数据库服务，支持向量数据的管理和检索。
+
+```bash
+# 启动 Milvus RESTful API 服务
+./remdb-server --milvus_enabled true --milvus_port 19530
+
+# 启动 Milvus 服务并配置认证密钥
+./remdb-server --milvus_enabled true --milvus_api_key "my-api-key"
+```
+
+Milvus 兼容 API 端点：
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/v2/vectordb/collections/create` | POST | 创建集合 |
+| `/v2/vectordb/collections/drop` | POST | 删除集合 |
+| `/v2/vectordb/collections/describe` | POST | 获取集合详情 |
+| `/v2/vectordb/collections/list` | POST | 列出所有集合 |
+| `/v2/vectordb/entities/insert` | POST | 插入实体 |
+| `/v2/vectordb/entities/delete` | POST | 删除实体 |
+| `/v2/vectordb/entities/query` | POST | 查询实体 |
+| `/v2/vectordb/entities/search` | POST | 向量搜索 |
+| `/v2/vectordb/entities/get` | POST | 获取实体 |
+
+### 9. 使用 remdbcli（独立 CLI 模式）
+
+remdb-server 还提供了独立的 CLI 二进制文件 `remdbcli`，适合不需要 JDBC 服务的场景：
+
+```bash
+# 启动独立 CLI 模式
+cargo run --bin remdbcli
+
+# 在 CLI 中执行 SQL 查询
+> CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(50), age INT);
+> INSERT INTO users (id, name, age) VALUES (1, 'Alice', 25);
+> SELECT * FROM users;
+```
+
+## 相关项目
+
+- [remdb-python](remdb-python/)：Python 绑定库，支持 NumPy/Pandas 集成
+- [jdbc-driver](jdbc-driver/)：Java JDBC 驱动
+- [SPEC.md](SPEC.md)：项目设计规格文档

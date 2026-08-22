@@ -12,13 +12,17 @@ remdb_include_dir = os.path.abspath('../remdb/include')
 remdb_lib_dir = os.path.abspath('../remdb/target/release')
 
 # 定义C扩展模块
+libraries = ['remdb']
+if sys.platform == 'win32':
+    libraries += ['ws2_32', 'advapi32', 'kernel32', 'ntdll', 'bcrypt', 'userenv']
+
 ext_modules = [
     Extension(
         '_remdb',
         sources=['src/remdb_extension.cpp'],
         include_dirs=['src', pybind11_include_dir, remdb_include_dir],
         library_dirs=[remdb_lib_dir],
-        libraries=['remdb', 'ws2_32', 'advapi32', 'kernel32', 'ntdll', 'bcrypt', 'userenv'],
+        libraries=libraries,
         language='c++'
     )
 ]
@@ -32,10 +36,10 @@ class BuildExt(build_ext):
                 # 为不同编译器设置合适的C++标准选项
                 if sys.platform == 'win32':
                     # MSVC使用不同的语法
-                    ext.extra_compile_args = ['/std:c++11']
+                    ext.extra_compile_args = ['/std:c++14']
                 else:
                     # GCC/Clang
-                    ext.extra_compile_args = ['-std=c++11']
+                    ext.extra_compile_args = ['-std=c++14']
         super().build_extensions()
 
 # 读取README.md作为长描述
