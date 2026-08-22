@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+*.so
+*.pyd
+*.dll
+*.dylib
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
