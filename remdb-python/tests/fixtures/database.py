@@ -156,7 +156,11 @@ class BaseTestCase(unittest.TestCase):
             table = self.conn.get_table(table_name)
             self.assertIsNotNone(table)
         except remdb.NotFoundError:
-            self.fail(f"Table '{table_name}' does not exist")
+            # Also check for timeseries tables via DESCRIBE TABLE
+            try:
+                self.execute_sql(f"DESCRIBE TABLE {table_name}")
+            except Exception:
+                self.fail(f"Table '{table_name}' does not exist")
     
     def assert_table_not_exists(self, table_name: str):
         """Assert that a table does not exist in the database"""
