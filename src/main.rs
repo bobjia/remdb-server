@@ -414,6 +414,9 @@ async fn main() {
         "./wal"
     };
 
+    // Save Milvus config before config variable is shadowed
+    let milvus_config_saved = config.milvus.clone();
+
     // 创建配置
     let config = Box::leak(Box::new(remdb::config::DbConfig {
         tables: static_tables,
@@ -667,6 +670,23 @@ async fn main() {
         });
     } else {
         info!("JDBC server is disabled");
+    }
+
+    // Start Milvus RESTful API server if enabled
+    let milvus_enabled = args.milvus_enabled.unwrap_or(milvus_config_saved.enabled);
+    if milvus_enabled {
+        let milvus_db = db_arc.clone();
+        let milvus_port = args.milvus_port;
+        let milvus_api_key = args.milvus_api_key.clone().or(milvus_config_saved.api_key.clone());
+        tokio::spawn(async move {
+            let server = remdb_server::milvus::MilvusServer::new(
+                milvus_db,
+                milvus_port,
+                milvus_api_key,
+            );
+            server.start().await;
+        });
+        info!("Milvus RESTful API server enabled on port {}", milvus_port);
     }
 
     // 添加定时器线程，定期检查是否需要创建checkpoint
