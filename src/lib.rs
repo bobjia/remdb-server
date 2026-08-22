@@ -30,6 +30,7 @@ mod ddl_compiler;
 pub mod error;
 pub mod handler;
 pub mod jdbc_server;
+pub mod milvus;
 pub mod network;
 pub mod pool;
 pub mod proto;

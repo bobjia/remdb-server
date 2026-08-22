@@ -59,6 +59,20 @@ pub struct SnapshotConfig {
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
+pub struct MilvusConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_milvus_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+fn default_milvus_port() -> u16 {
+    19530
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
 pub struct Config {
     pub snapshot_dir: Option<String>,
     pub total_memory: Option<usize>,
@@ -81,6 +95,8 @@ pub struct Config {
     pub pubsub: Option<PubSubConfig>,
     pub wal: Option<WALConfig>,
     pub ha: Option<HaConfig>,
+    #[serde(default)]
+    pub milvus: MilvusConfig,
 }
 
 impl Config {

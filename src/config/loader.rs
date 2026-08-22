@@ -118,6 +118,15 @@ pub struct Args {
 
     #[arg(long)]
     pub ha_node_id: Option<String>,
+
+    #[arg(long, default_value_t = 19530)]
+    pub milvus_port: u16,
+
+    #[arg(long)]
+    pub milvus_api_key: Option<String>,
+
+    #[arg(long)]
+    pub milvus_enabled: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
