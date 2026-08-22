@@ -1,13 +1,16 @@
-use remdb::types::*;
-use remdb::{DdlExecutor, RemDb};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::result::Result;
+use std::sync::{Arc, Mutex};
+
+use remdb::types::{DataType, DistanceType, IndexType, Value};
+use remdb::RemDb;
+use tokio::sync::RwLock;
 
 use crate::milvus::converter;
 use crate::milvus::error::MilvusError;
 use crate::milvus::models;
 
+/// Catalog entry describing a Milvus collection
 #[derive(Debug, Clone)]
 pub struct CatalogEntry {
     pub collection_id: i64,
@@ -26,18 +29,43 @@ pub struct CatalogEntry {
     pub row_count: usize,
 }
 
+/// System table name for catalog
 const CATALOG_TABLE: &str = "_milvus_catalog";
 
+/// Generate the data table name for a collection
 pub fn data_table_name(collection_id: i64) -> String {
     format!("_milvus_coll_{}", collection_id)
 }
 
+/// Field indices for the _milvus_catalog table
+const CAT_COL_COLLECTION_ID: usize = 0;
+const CAT_COL_COLLECTION_NAME: usize = 1;
+const CAT_COL_DESCRIPTION: usize = 2;
+const CAT_COL_SCHEMA_JSON: usize = 3;
+const CAT_COL_PRIMARY_FIELD: usize = 4;
+const CAT_COL_VECTOR_FIELD: usize = 5;
+const CAT_COL_AUTO_ID: usize = 6;
+const CAT_COL_DIMENSION: usize = 7;
+const CAT_COL_METRIC_TYPE: usize = 8;
+const CAT_COL_INDEX_TYPE: usize = 9;
+const CAT_COL_INDEX_PARAMS: usize = 10;
+const CAT_COL_REMDB_TABLE_NAME: usize = 11;
+const CAT_COL_CREATED_AT: usize = 12;
+const CAT_COL_ROW_COUNT: usize = 13;
+
+/// Collection catalog managing Milvus collection metadata
 pub struct MilvusCatalog {
     db: Arc<Mutex<&'static mut RemDb>>,
+    /// In-memory cache of collection_name → CatalogEntry
     cache: tokio::sync::RwLock<HashMap<String, CatalogEntry>>,
 }
 
 impl MilvusCatalog {
+    /// Get a reference to the database mutex
+    pub fn db(&self) -> Arc<Mutex<&'static mut RemDb>> {
+        Arc::clone(&self.db)
+    }
+
     pub fn new(db: Arc<Mutex<&'static mut RemDb>>) -> Self {
         MilvusCatalog {
             db,
@@ -45,33 +73,40 @@ impl MilvusCatalog {
         }
     }
 
+    /// Initialize the catalog system table if it doesn't exist
     pub async fn init(&self) -> Result<(), MilvusError> {
-        let mut db = self.db.lock().await;
-        let fields = [
-            ("collection_id", DataType::Integer, 0u16, None, None),
-            ("collection_name", DataType::Text, 64u16, None, None),
-            ("description", DataType::Text, 256u16, None, None),
-            ("schema_json", DataType::Text, 4096u16, None, None),
-            ("primary_field", DataType::Text, 64u16, None, None),
-            ("vector_field", DataType::Text, 64u16, None, None),
-            ("auto_id", DataType::Boolean, 0u16, None, None),
-            ("dimension", DataType::Integer, 0u16, None, None),
-            ("metric_type", DataType::Text, 32u16, None, None),
-            ("index_type", DataType::Text, 32u16, None, None),
-            ("index_params", DataType::Text, 1024u16, None, None),
-            ("remdb_table_name", DataType::Text, 64u16, None, None),
-            ("created_at", DataType::Integer, 0u16, None, None),
-            ("row_count", DataType::Integer, 0u16, None, None),
+        // Create the catalog table if it doesn't exist
+        let catalog_fields: &[(&str, DataType, u16, Option<DistanceType>, Option<Value>)] = &[
+            ("collection_id", DataType::Int64, 0, None, None),
+            ("collection_name", DataType::VarChar, 64, None, None),
+            ("description", DataType::VarChar, 256, None, None),
+            ("schema_json", DataType::VarChar, 4096, None, None),
+            ("primary_field", DataType::VarChar, 64, None, None),
+            ("vector_field", DataType::VarChar, 64, None, None),
+            ("auto_id", DataType::Bool, 0, None, None),
+            ("dimension", DataType::Int64, 0, None, None),
+            ("metric_type", DataType::VarChar, 32, None, None),
+            ("index_type", DataType::VarChar, 32, None, None),
+            ("index_params", DataType::VarChar, 1024, None, None),
+            ("remdb_table_name", DataType::VarChar, 64, None, None),
+            ("created_at", DataType::Int64, 0, None, None),
+            ("row_count", DataType::Int64, 0, None, None),
         ];
-        let _ = db.create_table(CATALOG_TABLE, &fields, Some(vec![0]));
+        {
+            let mut db = self.db.lock().unwrap();
+            let _ = db.create_table(CATALOG_TABLE, catalog_fields, Some(vec![0]));
+        }
+        // Refresh cache
         self.refresh_cache().await;
         Ok(())
     }
 
+    /// Create a new Milvus collection
     pub async fn create_collection(
         &self,
         req: &models::CreateCollectionRequest,
     ) -> Result<CatalogEntry, MilvusError> {
+        // 1. Validate schema
         let fields = &req.schema.fields;
         let mut primary_field = None;
         let mut vector_field = None;
@@ -101,10 +136,12 @@ impl MilvusCatalog {
             return Err(MilvusError::InvalidDimension("dim must be 1-1024".to_string()));
         }
 
-        if self.collection_exists(&req.collection_name).await? {
+        // 2. Check for duplicate
+        if self.collection_exists(&req.collection_name).await {
             return Err(MilvusError::DuplicateCollection(req.collection_name.clone()));
         }
 
+        // 3. Get next collection_id
         let collection_id = self.next_collection_id().await;
         let remdb_table = data_table_name(collection_id);
         let now = std::time::SystemTime::now()
@@ -112,195 +149,273 @@ impl MilvusCatalog {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        let mut db = self.db.lock().await;
-        let mut remdb_fields: Vec<(&str, DataType, u16, Option<DistanceType>, Option<Value>)> =
-            Vec::new();
+        // 4. Create remdb table for this collection (synchronous, no await)
+        let entry = {
+            let mut db = self.db.lock().unwrap();
 
-        for f in fields {
-            let dt = converter::milvus_type_to_remdb(&f.field_type)
-                .map_err(|_| MilvusError::InvalidSchema(format!("unknown type: {}", f.field_type)))?;
+            let mut remdb_fields: Vec<(&str, DataType, u16, Option<DistanceType>, Option<Value>)> =
+                Vec::new();
 
-            let (size, dist) = if f.field_type == "FloatVector" {
-                (dimension as u16, Some(DistanceType::L2))
-            } else if dt == DataType::Text {
-                let max_len = f.params.as_ref().and_then(|p| p.max_length).unwrap_or(256) as u16;
-                (max_len, None)
-            } else {
-                (0, None)
-            };
+            for f in fields {
+                let dt = converter::milvus_type_to_remdb(&f.field_type)
+                    .map_err(|_| MilvusError::InvalidSchema(format!("unknown type: {}", f.field_type)))?;
 
-            remdb_fields.push((f.name.as_str(), dt, size, dist, None));
-        }
+                let (size, dist) = if f.field_type == "FloatVector" {
+                    (dimension, Some(DistanceType::L2))
+                } else if dt == DataType::VarChar {
+                    let max_len = f.params.as_ref().and_then(|p| p.max_length).unwrap_or(256) as u16;
+                    (max_len, None)
+                } else {
+                    (0, None)
+                };
 
-        let metric_type = req.index_params.as_ref()
-            .and_then(|params| params.first())
-            .map(|p| p.metric_type.clone())
-            .unwrap_or_else(|| "L2".to_string());
+                remdb_fields.push((f.name.as_str(), dt, size, dist, None));
+            }
 
-        let index_type = req.index_params.as_ref()
-            .and_then(|params| params.first())
-            .and_then(|p| p.params.as_ref())
-            .and_then(|p| p.index_type.clone())
-            .unwrap_or_else(|| "HNSW".to_string());
+            // Default metric type from index params
+            let metric_type = req.index_params.as_ref()
+                .and_then(|params| params.first())
+                .map(|p| p.metric_type.clone())
+                .unwrap_or_else(|| "L2".to_string());
 
-        let index_params_json = req.index_params.as_ref()
-            .and_then(|params| params.first())
-            .map(|p| serde_json::to_string(p).unwrap_or_default())
-            .unwrap_or_default();
+            let index_type_str = req.index_params.as_ref()
+                .and_then(|params| params.first())
+                .and_then(|p| p.params.as_ref())
+                .and_then(|p| p.index_type.clone())
+                .unwrap_or_else(|| "HNSW".to_string());
 
-        db.create_table(&remdb_table, &remdb_fields, Some(vec![0]))
-            .map_err(|e| MilvusError::InternalError(format!("create table: {:?}", e)))?;
+            let index_params_json = req.index_params.as_ref()
+                .and_then(|params| params.first())
+                .map(|p| serde_json::to_string(p).unwrap_or_default())
+                .unwrap_or_default();
 
-        if let Ok(v_idx) = converter::milvus_index_to_vector_index(&index_type) {
-            let remdb_idx_type = match v_idx {
-                VectorIndexType::HNSW => IndexType::Vector,
-                VectorIndexType::IVF => IndexType::Vector,
-                VectorIndexType::IVF_PQ => IndexType::Vector,
-                _ => IndexType::Vector,
-            };
-            let _ = db.create_index(&remdb_table, &vector_field, remdb_idx_type);
-        }
+            // Create the table
+            db.create_table(&remdb_table, &remdb_fields, Some(vec![0]))
+                .map_err(|e| MilvusError::InternalError(format!("create table: {:?}", e)))?;
 
-        let schema_json = serde_json::to_string(&req.schema).unwrap_or_default();
-        let sql = format!(
-            "INSERT INTO {} (collection_id, collection_name, description, schema_json, \
-             primary_field, vector_field, auto_id, dimension, metric_type, index_type, \
-             index_params, remdb_table_name, created_at, row_count) \
-             VALUES ({}, '{}', '{}', '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, 0)",
-            CATALOG_TABLE,
-            collection_id,
-            req.collection_name.replace('\'', "''"),
-            req.description.as_deref().unwrap_or("").replace('\'', "''"),
-            schema_json.replace('\'', "''"),
-            primary_field.replace('\'', "''"),
-            vector_field.replace('\'', "''"),
-            if auto_id { 1 } else { 0 },
-            dimension,
-            metric_type.replace('\'', "''"),
-            index_type.replace('\'', "''"),
-            index_params_json.replace('\'', "''"),
-            remdb_table.replace('\'', "''"),
-            now,
-        );
-        let _ = db.sql_query(&sql);
+            // Create vector index on the vector field
+            let _ = db.create_index(&remdb_table, &vector_field, IndexType::Vector);
 
-        let entry = CatalogEntry {
-            collection_id,
-            collection_name: req.collection_name.clone(),
-            description: req.description.clone().unwrap_or_default(),
-            schema_json,
-            primary_field,
-            vector_field,
-            auto_id,
-            dimension,
-            metric_type,
-            index_type,
-            index_params: index_params_json,
-            remdb_table_name: remdb_table,
-            created_at: now,
-            row_count: 0,
-        };
+            // 5. Insert into catalog table using SQL
+            let schema_json = serde_json::to_string(&req.schema).unwrap_or_default();
+            let auto_id_int = if auto_id { 1 } else { 0 };
+            let sql = format!(
+                "INSERT INTO {} (collection_id, collection_name, description, schema_json, \
+                 primary_field, vector_field, auto_id, dimension, metric_type, index_type, \
+                 index_params, remdb_table_name, created_at, row_count) \
+                 VALUES ({}, '{}', '{}', '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, 0)",
+                CATALOG_TABLE,
+                collection_id,
+                escape_sql_string(&req.collection_name),
+                escape_sql_string(req.description.as_deref().unwrap_or("")),
+                escape_sql_string(&schema_json),
+                escape_sql_string(&primary_field),
+                escape_sql_string(&vector_field),
+                auto_id_int,
+                dimension,
+                escape_sql_string(&metric_type),
+                escape_sql_string(&index_type_str),
+                escape_sql_string(&index_params_json),
+                escape_sql_string(&remdb_table),
+                now,
+            );
+            let _ = db.sql_query(&sql);
 
-        {
-            let mut cache = self.cache.write().await;
-            cache.insert(req.collection_name.clone(), entry.clone());
-        }
+            CatalogEntry {
+                collection_id,
+                collection_name: req.collection_name.clone(),
+                description: req.description.clone().unwrap_or_default(),
+                schema_json,
+                primary_field,
+                vector_field,
+                auto_id,
+                dimension,
+                metric_type,
+                index_type: index_type_str,
+                index_params: index_params_json,
+                remdb_table_name: remdb_table,
+                created_at: now,
+                row_count: 0,
+            }
+        }; // db lock is dropped here
+
+        // Update cache
+        let mut cache = self.cache.write().await;
+        cache.insert(req.collection_name.clone(), entry.clone());
 
         Ok(entry)
     }
 
+    /// Drop a collection
     pub async fn drop_collection(&self, name: &str) -> Result<(), MilvusError> {
         let entry = self.resolve_collection(name).await?;
-        let mut db = self.db.lock().await;
-        let _ = db.drop_table(&entry.remdb_table_name, true, false);
-        let sql = format!("DELETE FROM {} WHERE collection_name = '{}'", CATALOG_TABLE, name.replace('\'', "''"));
-        let _ = db.sql_query(&sql);
+        {
+            let mut db = self.db.lock().unwrap();
+            // Drop the data table
+            let _ = db.drop_table(&entry.remdb_table_name, true, false);
+            // Remove from catalog
+            let sql = format!(
+                "DELETE FROM {} WHERE collection_name = '{}'",
+                CATALOG_TABLE,
+                escape_sql_string(name)
+            );
+            let _ = db.sql_query(&sql);
+        }
+        // Update cache
         let mut cache = self.cache.write().await;
         cache.remove(name);
         Ok(())
     }
 
+    /// Resolve a collection name to its catalog entry
     pub async fn resolve_collection(&self, name: &str) -> Result<CatalogEntry, MilvusError> {
+        // Check cache first
         {
             let cache = self.cache.read().await;
             if let Some(entry) = cache.get(name) {
                 return Ok(entry.clone());
             }
         }
-        let mut db = self.db.lock().await;
-        let sql = format!("SELECT * FROM {} WHERE collection_name = '{}'", CATALOG_TABLE, name.replace('\'', "''"));
-        let result = db.sql_query(&sql).map_err(|_| MilvusError::CollectionNotFound(name.to_string()))?;
-        if let Some(row) = result.rows.first() {
-            if row.values.len() >= 14 {
-                let entry = CatalogEntry {
-                    collection_id: row.values[0].value.i64,
-                    collection_name: row.values[1].to_string(),
-                    description: row.values[2].to_string(),
-                    schema_json: row.values[3].to_string(),
-                    primary_field: row.values[4].to_string(),
-                    vector_field: row.values[5].to_string(),
-                    auto_id: row.values[6].value.u64 != 0,
-                    dimension: row.values[7].value.u64 as u16,
-                    metric_type: row.values[8].to_string(),
-                    index_type: row.values[9].to_string(),
-                    index_params: row.values[10].to_string(),
-                    remdb_table_name: row.values[11].to_string(),
-                    created_at: row.values[12].value.i64,
-                    row_count: row.values[13].value.u64 as usize,
-                };
-                let mut cache = self.cache.write().await;
-                cache.insert(entry.collection_name.clone(), entry.clone());
-                return Ok(entry);
+        // Fall back to querying the catalog table
+        let entry_opt = {
+            let mut db = self.db.lock().unwrap();
+            let sql = format!(
+                "SELECT * FROM {} WHERE collection_name = '{}'",
+                CATALOG_TABLE,
+                escape_sql_string(name)
+            );
+            let result = db.sql_query(&sql)
+                .map_err(|_| MilvusError::CollectionNotFound(name.to_string()))?;
+            // Parse the first row
+            if let Some(row) = result.rows.first() {
+                let entry = parse_catalog_row(row, &result.columns);
+                Some(entry)
+            } else {
+                None
             }
+        }; // db lock is dropped here
+        if let Some(entry) = entry_opt {
+            // Update cache
+            let mut cache = self.cache.write().await;
+            cache.insert(name.to_string(), entry.clone());
+            Ok(entry)
+        } else {
+            Err(MilvusError::CollectionNotFound(name.to_string()))
         }
-        Err(MilvusError::CollectionNotFound(name.to_string()))
     }
 
+    /// List all collections
     pub async fn list_collections(&self) -> Result<Vec<CatalogEntry>, MilvusError> {
         let cache = self.cache.read().await;
         Ok(cache.values().cloned().collect())
     }
 
-    pub async fn collection_exists(&self, name: &str) -> Result<bool, MilvusError> {
+    /// Check if a collection exists
+    pub async fn collection_exists(&self, name: &str) -> bool {
         let cache = self.cache.read().await;
-        Ok(cache.contains_key(name))
+        cache.contains_key(name)
     }
 
-    pub async fn next_collection_id(&self) -> i64 {
+    /// Get the next collection ID
+    async fn next_collection_id(&self) -> i64 {
         let cache = self.cache.read().await;
         let max_id = cache.values().map(|e| e.collection_id).max().unwrap_or(0);
         max_id + 1
     }
 
+    /// Refresh the in-memory cache from the catalog table
     async fn refresh_cache(&self) {
-        let mut db = self.db.lock().await;
-        let sql = format!("SELECT * FROM {}", CATALOG_TABLE);
-        if let Ok(result) = db.sql_query(&sql) {
-            let mut cache = self.cache.write().await;
-            cache.clear();
-            for row in &result.rows {
-                if row.values.len() >= 14 {
-                    let entry = CatalogEntry {
-                        collection_id: row.values[0].value.i64,
-                        collection_name: row.values[1].to_string(),
-                        description: row.values[2].to_string(),
-                        schema_json: row.values[3].to_string(),
-                        primary_field: row.values[4].to_string(),
-                        vector_field: row.values[5].to_string(),
-                        auto_id: row.values[6].value.u64 != 0,
-                        dimension: row.values[7].value.u64 as u16,
-                        metric_type: row.values[8].to_string(),
-                        index_type: row.values[9].to_string(),
-                        index_params: row.values[10].to_string(),
-                        remdb_table_name: row.values[11].to_string(),
-                        created_at: row.values[12].value.i64,
-                        row_count: row.values[13].value.u64 as usize,
-                    };
-                    cache.insert(entry.collection_name.clone(), entry);
+        let entries = {
+            let mut db = self.db.lock().unwrap();
+            let sql = format!("SELECT * FROM {}", CATALOG_TABLE);
+            if let Ok(result) = db.sql_query(&sql) {
+                let mut entries = Vec::new();
+                for row in &result.rows {
+                    let entry = parse_catalog_row(row, &result.columns);
+                    entries.push(entry);
                 }
+                entries
+            } else {
+                Vec::new()
             }
+        }; // db lock is dropped here
+        let mut cache = self.cache.write().await;
+        cache.clear();
+        for entry in entries {
+            cache.insert(entry.collection_name.clone(), entry);
         }
     }
+}
+
+/// Parse a catalog row from the ResultSet
+fn parse_catalog_row(row: &remdb::sql::ResultRow, _columns: &[String]) -> CatalogEntry {
+    // Helper to read string from a TypedValue
+    let read_string = |idx: usize| -> String {
+        if let Some(val) = row.values.get(idx) {
+            unsafe {
+                let bytes = &val.value.string;
+                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                String::from_utf8_lossy(&bytes[..end]).to_string()
+            }
+        } else {
+            String::new()
+        }
+    };
+
+    // Helper to read i64 from a TypedValue
+    let read_i64 = |idx: usize| -> i64 {
+        if let Some(val) = row.values.get(idx) {
+            unsafe { val.value.i64 }
+        } else {
+            0
+        }
+    };
+
+    // Helper to read bool from a TypedValue
+    let read_bool = |idx: usize| -> bool {
+        if let Some(val) = row.values.get(idx) {
+            unsafe { val.value.bool }
+        } else {
+            false
+        }
+    };
+
+    let collection_id = read_i64(CAT_COL_COLLECTION_ID);
+    let collection_name = read_string(CAT_COL_COLLECTION_NAME);
+    let description = read_string(CAT_COL_DESCRIPTION);
+    let schema_json = read_string(CAT_COL_SCHEMA_JSON);
+    let primary_field = read_string(CAT_COL_PRIMARY_FIELD);
+    let vector_field = read_string(CAT_COL_VECTOR_FIELD);
+    let auto_id = read_bool(CAT_COL_AUTO_ID);
+    let dimension = read_i64(CAT_COL_DIMENSION) as u16;
+    let metric_type = read_string(CAT_COL_METRIC_TYPE);
+    let index_type = read_string(CAT_COL_INDEX_TYPE);
+    let index_params = read_string(CAT_COL_INDEX_PARAMS);
+    let remdb_table_name = read_string(CAT_COL_REMDB_TABLE_NAME);
+    let created_at = read_i64(CAT_COL_CREATED_AT);
+    let row_count = read_i64(CAT_COL_ROW_COUNT) as usize;
+
+    CatalogEntry {
+        collection_id,
+        collection_name,
+        description,
+        schema_json,
+        primary_field,
+        vector_field,
+        auto_id,
+        dimension,
+        metric_type,
+        index_type,
+        index_params,
+        remdb_table_name,
+        created_at,
+        row_count,
+    }
+}
+
+/// Escape a string for SQL (single quote escaping)
+fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
 }
 
 #[cfg(test)]
@@ -308,15 +423,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_catalog_table_name() {
+    fn test_data_table_name() {
         assert_eq!(data_table_name(1), "_milvus_coll_1");
         assert_eq!(data_table_name(42), "_milvus_coll_42");
+        assert_eq!(data_table_name(0), "_milvus_coll_0");
     }
 
     #[test]
-    fn test_catalog_table_name_format() {
-        let name = data_table_name(100);
-        assert!(name.starts_with("_milvus_coll_"));
-        assert_eq!(name, "_milvus_coll_100");
+    fn test_escape_sql_string_no_quotes() {
+        assert_eq!(escape_sql_string("hello"), "hello");
+    }
+
+    #[test]
+    fn test_escape_sql_string_with_quotes() {
+        assert_eq!(escape_sql_string("it's"), "it''s");
+    }
+
+    #[test]
+    fn test_escape_sql_string_multiple_quotes() {
+        assert_eq!(escape_sql_string("a'b'c"), "a''b''c");
+    }
+
+    #[test]
+    fn test_escape_sql_string_empty() {
+        assert_eq!(escape_sql_string(""), "");
+    }
+
+    #[test]
+    fn test_data_table_name_large_id() {
+        assert_eq!(data_table_name(999999), "_milvus_coll_999999");
+    }
+
+    #[test]
+    fn test_data_table_name_negative() {
+        assert_eq!(data_table_name(-1), "_milvus_coll_-1");
     }
 }

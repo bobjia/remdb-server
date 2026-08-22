@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::fmt;
 
+use remdb::RemDbError;
+
 /// Milvus-compatible error codes
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MilvusCode {
@@ -86,6 +88,13 @@ impl MilvusError {
     }
 }
 
+/// Convert remdb errors to Milvus errors
+impl From<RemDbError> for MilvusError {
+    fn from(e: RemDbError) -> Self {
+        MilvusError::InternalError(format!("{:?}", e))
+    }
+}
+
 impl fmt::Display for MilvusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MilvusError({}): {}", self.code(), self.message())
@@ -125,5 +134,12 @@ mod tests {
         let err = MilvusError::InternalError("test".to_string());
         assert_eq!(err.http_status(), 500);
         assert_eq!(err.code(), 9999);
+    }
+
+    #[test]
+    fn test_from_remdb_error() {
+        let remdb_err = remdb::RemDbError::TableNotFound;
+        let milvus_err: MilvusError = remdb_err.into();
+        assert_eq!(milvus_err.code(), 9999);
     }
 }

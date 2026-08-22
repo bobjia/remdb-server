@@ -113,28 +113,7 @@ impl WorkerThread {
             while !flag_clone.load(Ordering::SeqCst) {
                 // 从无锁队列获取请求
                 if let Some((request, response_tx)) = queue_clone.pop() {
-                    let mut db_guard = match db_clone.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => {
-                            error!(
-                                "Mutex was poisoned, this indicates a thread panic while holding the lock"
-                            );
-                            error!("This is a critical error that requires server restart");
-
-                            let error_response = JdbcResponse {
-                                request_id: request.request_id,
-                                status: Status::ServerError.into(),
-                                error_message: "Database is in inconsistent state due to internal error. Please restart the server.".to_string(),
-                                response: None,
-                            };
-
-                            let tx: tokio::sync::mpsc::UnboundedSender<JdbcResponse> = response_tx;
-                            if tx.send(error_response).is_err() {
-                                error!("Failed to send error response: channel closed");
-                            }
-                            continue;
-                        }
-                    };
+                    let mut db_guard = db_clone.lock().unwrap();
                     let response = JdbcProtocolHandler::process_single_request(
                         &mut *db_guard,
                         request,
@@ -558,24 +537,7 @@ impl JdbcProtocolHandler {
     pub async fn handle_batch(&self, batch: Vec<JdbcRequest>) -> Vec<JdbcResponse> {
         let mut responses = Vec::with_capacity(batch.len());
 
-        let mut db_lock = match self.db.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                error!(
-                    "Mutex was poisoned during batch processing, this indicates a thread panic while holding the lock"
-                );
-                error!("This is a critical error that requires server restart");
-
-                return batch.iter().map(|req| {
-                    JdbcResponse {
-                        request_id: req.request_id,
-                        status: Status::ServerError.into(),
-                        error_message: "Database is in inconsistent state due to internal error. Please restart of server.".to_string(),
-                        response: None,
-                    }
-                }).collect();
-            }
-        };
+        let mut db_lock = self.db.lock().unwrap();
 
         let auth_enabled = self.auth_enabled;
         let username = self.username.clone();

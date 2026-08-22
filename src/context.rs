@@ -1,6 +1,5 @@
 use remdb::RemDb;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::config::RuntimeConfig;
 use crate::error::{ServerError, ServerResult};

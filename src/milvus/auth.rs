@@ -37,6 +37,8 @@ pub fn auth_filter(
                 }
             }
         })
+        .map(|_: ()| ())
+        .untuple_one()
 }
 
 #[cfg(test)]

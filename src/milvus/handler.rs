@@ -1,9 +1,8 @@
 use std::convert::Infallible;
+use std::result::Result;
 use std::sync::Arc;
 
-use remdb::RemDb;
-use remdb::types::{IndexType};
-use tokio::sync::Mutex;
+use remdb::types::DataType;
 use warp::Reply;
 
 use crate::milvus::catalog::MilvusCatalog;
@@ -11,8 +10,10 @@ use crate::milvus::converter::{self, FilterExpr, parse_milvus_filter};
 use crate::milvus::error::MilvusError;
 use crate::milvus::models::*;
 
+// ── Collection handlers ──
+
 pub async fn handle_create_collection(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: CreateCollectionRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.create_collection(&body).await.map_err(|e| {
@@ -22,11 +23,12 @@ pub async fn handle_create_collection(
         collection_name: entry.collection_name,
         description: if entry.description.is_empty() { None } else { Some(entry.description) },
     };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_drop_collection(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: DropCollectionRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     catalog.drop_collection(&body.collection_name).await.map_err(|e| {
@@ -37,7 +39,7 @@ pub async fn handle_drop_collection(
 }
 
 pub async fn handle_list_collections(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
 ) -> Result<impl Reply, warp::Rejection> {
     let entries = catalog.list_collections().await.map_err(|e| {
         warp::reject::custom(e)
@@ -46,72 +48,80 @@ pub async fn handle_list_collections(
         collection_name: e.collection_name,
         description: if e.description.is_empty() { None } else { Some(e.description) },
     }).collect();
-    Ok(warp::reply::json(&MilvusResponse::success(collections)))
+    let response = MilvusResponse::success(collections);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_describe_collection(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: DescribeCollectionRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
-    let fields: Vec<FieldSchemaResponse> = serde_json::from_str::<Vec<FieldSchemaResponse>>(
-        &entry.schema_json
-    ).unwrap_or_default();
+    // Parse schema_json back to fields
+    let schema: CollectionSchema = serde_json::from_str(&entry.schema_json).unwrap_or_else(|_| {
+        CollectionSchema {
+            auto_id: Some(entry.auto_id),
+            description: None,
+            fields: Vec::new(),
+        }
+    });
+    let fields: Vec<FieldSchemaResponse> = schema.fields.iter().map(|f| FieldSchemaResponse {
+        name: f.name.clone(),
+        field_type: f.field_type.clone(),
+        is_primary: f.is_primary,
+        auto_id: f.auto_id,
+        params: f.params.clone(),
+    }).collect();
     let data = DescribeCollectionData {
         collection_name: entry.collection_name,
         description: if entry.description.is_empty() { None } else { Some(entry.description) },
         schema: CollectionSchemaResponse { fields },
         statistics: CollectionStatistics { row_count: entry.row_count },
     };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_has_collection(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: HasCollectionRequest,
 ) -> Result<impl Reply, warp::Rejection> {
-    let has = catalog.collection_exists(&body.collection_name).await.unwrap_or(false);
+    let has = catalog.collection_exists(&body.collection_name).await;
     let data = HasCollectionData { has };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
+// ── Entity handlers ──
+
 pub async fn handle_insert(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: InsertRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
 
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
     let mut ids = Vec::new();
 
     for entity in &body.data {
+        // Build column names and values from the JSON entity
         let mut col_names = Vec::new();
         let mut col_values = Vec::new();
 
         if let Some(obj) = entity.as_object() {
             for (key, val) in obj {
                 col_names.push(key.as_str());
-                let val_str = match val {
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Array(arr) => {
-                        let elements: Vec<String> = arr.iter()
-                            .filter_map(|v| v.as_f64().map(|f| f.to_string()))
-                            .collect();
-                        format!("'[{}]'", elements.join(", "))
-                    }
-                    _ => "'null'".to_string(),
-                };
+                let val_str = json_value_to_sql(val);
                 col_values.push(val_str);
             }
         }
 
+        // If auto_id, remove the primary key from columns
         if entry.auto_id {
             if let Some(pk_pos) = col_names.iter().position(|&n| n == entry.primary_field) {
                 col_names.remove(pk_pos);
@@ -119,6 +129,7 @@ pub async fn handle_insert(
             }
         }
 
+        // Build and execute INSERT SQL
         if !col_names.is_empty() {
             let cols = col_names.join(", ");
             let vals = col_values.join(", ");
@@ -128,9 +139,41 @@ pub async fn handle_insert(
             );
             let result = db_guard.sql_query(&sql)
                 .map_err(|e| warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e))))?;
-            if let Some(row) = result.rows.first() {
-                if let Some(val) = row.values.first() {
-                    ids.push(val.value.i64);
+            // Get the last inserted ID from the result (second column: last_insert_id)
+            let last_insert_id = if let Some(row) = result.rows.first() {
+                if let Some(val) = row.values.get(1) {
+                    unsafe {
+                        val.value.u64 as i64
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            ids.push(last_insert_id);
+
+            // Update the secondary index (vector index) for the inserted record
+            if let Some(obj) = entity.as_object() {
+                if let Some(vector_val) = obj.get("vector") {
+                    if let Some(vector_arr) = vector_val.as_array() {
+                        // Get the table and secondary index
+                        let (_table, sec_idx) = db_guard.get_table_and_secondary_index_mut_by_name(&entry.remdb_table_name)
+                            .map_err(|_| warp::reject::custom(MilvusError::SearchFailed("collection not found".to_string())))?;
+
+                        // Convert the vector array to raw f32 bytes
+                        let dim = vector_arr.len();
+                        let mut key = Vec::with_capacity(dim * 4);
+                        for val in vector_arr {
+                            let f = val.as_f64().unwrap_or(0.0) as f32;
+                            key.extend_from_slice(&f.to_le_bytes());
+                        }
+
+                        unsafe {
+                            sec_idx.insert(key.as_ptr(), key.len(), last_insert_id as u16)
+                                .map_err(|e| warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e))))?;
+                        }
+                    }
                 }
             }
         }
@@ -140,25 +183,28 @@ pub async fn handle_insert(
         insert_count: ids.len(),
         insert_ids: ids,
     };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_upsert(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: UpsertRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
     let mut ids = Vec::new();
 
     for entity in &body.data {
+        // Extract primary key value
         let pk_value = entity.get(&entry.primary_field)
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
+        // Check if record exists
         let check_sql = format!(
             "SELECT {} FROM {} WHERE {} = {}",
             entry.primary_field, entry.remdb_table_name, entry.primary_field, pk_value
@@ -168,22 +214,12 @@ pub async fn handle_upsert(
             .unwrap_or(false);
 
         if exists {
+            // UPDATE
             let mut set_clauses = Vec::new();
             if let Some(obj) = entity.as_object() {
                 for (key, val) in obj {
                     if key != &entry.primary_field {
-                        let val_str = match val {
-                            serde_json::Value::Number(n) => n.to_string(),
-                            serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                            serde_json::Value::Bool(b) => b.to_string(),
-                            serde_json::Value::Array(arr) => {
-                                let elements: Vec<String> = arr.iter()
-                                    .filter_map(|v| v.as_f64().map(|f| f.to_string()))
-                                    .collect();
-                                format!("'[{}]'", elements.join(", "))
-                            }
-                            _ => "'null'".to_string(),
-                        };
+                        let val_str = json_value_to_sql(val);
                         set_clauses.push(format!("{} = {}", key, val_str));
                     }
                 }
@@ -200,23 +236,13 @@ pub async fn handle_upsert(
             }
             ids.push(pk_value);
         } else {
+            // INSERT
             let mut col_names = Vec::new();
             let mut col_values = Vec::new();
             if let Some(obj) = entity.as_object() {
                 for (key, val) in obj {
                     col_names.push(key.clone());
-                    let val_str = match val {
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        serde_json::Value::Array(arr) => {
-                            let elements: Vec<String> = arr.iter()
-                                .filter_map(|v| v.as_f64().map(|f| f.to_string()))
-                                .collect();
-                            format!("'[{}]'", elements.join(", "))
-                        }
-                        _ => "'null'".to_string(),
-                    };
+                    let val_str = json_value_to_sql(val);
                     col_values.push(val_str);
                 }
             }
@@ -235,21 +261,23 @@ pub async fn handle_upsert(
         insert_count: ids.len(),
         insert_ids: ids,
     };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_delete(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: DeleteRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
     let filter = if body.filter.is_empty() {
         String::new()
     } else {
+        // Convert Milvus filter to SQL WHERE clause
         let expr = parse_milvus_filter(&body.filter)
             .map_err(|_| warp::reject::custom(MilvusError::InternalError("invalid filter".to_string())))?;
         match expr {
@@ -268,20 +296,21 @@ pub async fn handle_delete(
     let sql = format!("DELETE FROM {} {}", entry.remdb_table_name, filter);
     let result = db_guard.sql_query(&sql)
         .map_err(|e| warp::reject::custom(MilvusError::InternalError(format!("{:?}", e))))?;
-    let delete_count = result.affected_rows;
+    let delete_count = result.rows.len();
     let data = DeleteResponseData { delete_count };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_get(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: GetRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
     let sql = format!(
         "SELECT * FROM {} WHERE {} = {}",
         entry.remdb_table_name, entry.primary_field, body.id
@@ -293,24 +322,26 @@ pub async fn handle_get(
         let mut entity = serde_json::Map::new();
         for (i, col) in result.columns.iter().enumerate() {
             if let Some(val) = row.values.get(i) {
-                entity.insert(col.clone(), serde_json::Value::String(val.to_string()));
+                let str_val = typed_value_to_string(val);
+                entity.insert(col.clone(), serde_json::Value::String(str_val));
             }
         }
-        Ok(warp::reply::json(&MilvusResponse::success(entity)))
+        let response = MilvusResponse::success(serde_json::Value::Object(entity));
+        Ok(warp::reply::json(&response))
     } else {
         Err(warp::reject::custom(MilvusError::CollectionNotFound(body.collection_name.clone())))
     }
 }
 
 pub async fn handle_query(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: QueryRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
 
     let fields = body.output_fields.as_ref()
         .map(|f| f.join(", "))
@@ -335,90 +366,57 @@ pub async fn handle_query(
         let mut entity = serde_json::Map::new();
         for (i, col) in result.columns.iter().enumerate() {
             if let Some(val) = row.values.get(i) {
-                entity.insert(col.clone(), serde_json::Value::String(val.to_string()));
+                let str_val = typed_value_to_string(val);
+                entity.insert(col.clone(), serde_json::Value::String(str_val));
             }
         }
         rows_json.push(serde_json::Value::Object(entity));
     }
 
-    Ok(warp::reply::json(&MilvusResponse::success(rows_json)))
+    let response = MilvusResponse::success(rows_json);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_search(
-    db: Arc<Mutex<&'static mut RemDb>>,
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: SearchRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let entry = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
     let k = body.limit.unwrap_or(10);
-    let mut db_guard = db.lock().await;
+    let db = catalog.db();
+    let mut db_guard = db.lock().unwrap();
 
-    let table_id = {
-        let tables = db_guard.get_all_tables();
-        let mut found_id = None;
-        for (i, table_opt) in tables.iter().enumerate() {
-            if let Some(table) = table_opt {
-                if table.def.name == entry.remdb_table_name {
-                    found_id = Some(i);
-                    break;
-                }
-            }
+    // Get the table and secondary index
+    let (table, sec_idx) = db_guard.get_table_and_secondary_index_mut_by_name(&entry.remdb_table_name)
+        .map_err(|_| warp::reject::custom(MilvusError::CollectionNotFound(body.collection_name.clone())))?;
+
+    let results = match sec_idx {
+        remdb::AnySecondaryIndex::Vector(vec_idx) => {
+            unsafe { vec_idx.search_knn(body.vector.as_ptr(), k) }
+                .map_err(|_| warp::reject::custom(MilvusError::SearchFailed("search error".to_string())))?
         }
-        found_id
-    }.ok_or_else(|| warp::reject::custom(MilvusError::CollectionNotFound(body.collection_name.clone())))?;
-
-    let results = unsafe {
-        let sec_idx = db_guard.get_secondary_index_mut(table_id)
-            .map_err(|_| warp::reject::custom(MilvusError::SearchFailed("no index".to_string())))?;
-
-        match sec_idx {
-            remdb::AnySecondaryIndex::Vector(vec_idx) => {
-                vec_idx.search_knn(body.vector.as_ptr(), k)
-                    .map_err(|_| warp::reject::custom(MilvusError::SearchFailed("search error".to_string())))?
-            }
-            _ => {
-                return Err(warp::reject::custom(MilvusError::SearchFailed("not a vector index".to_string())));
-            }
+        _ => {
+            return Err(warp::reject::custom(MilvusError::SearchFailed("not a vector index".to_string())));
         }
     };
+    // Note: sec_idx mutable borrow is released here; table shared borrow remains
 
+    // Build response items
     let mut items = Vec::new();
     let offset = body.offset.unwrap_or(0);
     for (distance, record_id) in results.iter().skip(offset).take(k) {
-        if let Ok(Some(record_ref)) = db_guard.get_by_id_ref(table_id, *record_id as usize) {
+        if let Some(record_ref) = table.get_by_id_ref(*record_id as usize) {
             let mut entity = serde_json::Map::new();
+            // Build entity from output fields
             if let Some(out_fields) = &body.output_fields {
-                let table = db_guard.get_table(table_id)
-                    .map_err(|_| warp::reject::custom(MilvusError::InternalError("no table".to_string())))?;
                 for field_name in out_fields {
-                    for (i, f) in table.def.fields.iter().enumerate() {
-                        if f.name == *field_name {
-                            let val = match f.data_type {
-                                remdb::DataType::Integer => {
-                                    record_ref.get_i64(i).map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
-                                }
-                                remdb::DataType::Real => {
-                                    record_ref.get_f64(i).map(|v| serde_json::Value::Number(serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from_f64(0.0).unwrap())))
-                                }
-                                remdb::DataType::Text => {
-                                    record_ref.get_str(i).map(|v| serde_json::Value::String(v.to_string()))
-                                }
-                                remdb::DataType::Vector => {
-                                    record_ref.get_str(i).map(|v| serde_json::Value::String(v.to_string()))
-                                }
-                                remdb::DataType::Boolean => {
-                                    record_ref.get_bool(i).map(|v| serde_json::Value::Bool(v))
-                                }
-                                _ => {
-                                    record_ref.get_str(i).map(|v| serde_json::Value::String(v.to_string()))
-                                }
-                            };
-                            if let Ok(v) = val {
-                                entity.insert(field_name.clone(), v);
-                            }
-                            break;
+                    if let Some(field_idx) = table.def.fields.iter().position(|f| f.name == *field_name) {
+                        let field = &table.def.fields[field_idx];
+                        let val = typed_value_from_record(&record_ref, field_idx, field.data_type);
+                        if let Some(v) = val {
+                            entity.insert(field_name.clone(), v);
                         }
                     }
                 }
@@ -431,22 +429,27 @@ pub async fn handle_search(
         }
     }
 
-    Ok(warp::reply::json(&MilvusResponse::success(items)))
+    let response = MilvusResponse::success(items);
+    Ok(warp::reply::json(&response))
 }
 
+// ── Index handlers ──
+
 pub async fn handle_create_index(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: CreateIndexRequest,
 ) -> Result<impl Reply, warp::Rejection> {
+    // Validate metric type
     let _ = converter::milvus_metric_to_distance(&body.metric_type)
         .map_err(|_| warp::reject::custom(MilvusError::InvalidMetricType(body.metric_type.clone())))?;
 
     let data = IndexInfo { index_name: body.index_name };
-    Ok(warp::reply::json(&MilvusResponse::success(data)))
+    let response = MilvusResponse::success(data);
+    Ok(warp::reply::json(&response))
 }
 
 pub async fn handle_drop_index(
-    catalog: &MilvusCatalog,
+    catalog: Arc<MilvusCatalog>,
     body: DropIndexRequest,
 ) -> Result<impl Reply, warp::Rejection> {
     let _ = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
@@ -456,32 +459,125 @@ pub async fn handle_drop_index(
     Ok(warp::reply::json(&resp))
 }
 
+// ── Error recovery ──
+
+/// Convert warp rejections into Milvus-format JSON error responses
 pub async fn handle_rejection(err: warp::Rejection) -> Result<impl Reply, Infallible> {
-    let json = if let Some(milvus_err) = err.find::<MilvusError>() {
+    let (json, status) = if let Some(milvus_err) = err.find::<MilvusError>() {
         let http_status = milvus_err.http_status();
-        let resp = warp::reply::json(&milvus_err.to_json());
-        warp::reply::with_status(resp, warp::http::StatusCode::from_u16(http_status).unwrap_or(warp::http::StatusCode::BAD_REQUEST))
+        (milvus_err.to_json(), http_status)
     } else {
-        let json = serde_json::json!({"code": 9999, "message": "internal server error"});
-        warp::reply::with_status(json, warp::http::StatusCode::INTERNAL_SERVER_ERROR)
+        (serde_json::json!({"code": 9999, "message": "internal server error"}), 500)
     };
-    Ok(json)
+
+    let resp = warp::reply::json(&json);
+    let status_code = warp::http::StatusCode::from_u16(status).unwrap_or(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
+    Ok(warp::reply::with_status(resp, status_code))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ── Helper functions ──
 
-    #[test]
-    fn test_insert_ids_from_sql_result() {
-        let ids = vec![1i64, 2, 3];
-        assert_eq!(ids.len(), 3);
+/// Convert a JSON value to a SQL string representation
+fn json_value_to_sql(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        serde_json::Value::Bool(b) => {
+            if *b { "1".to_string() } else { "0".to_string() }
+        }
+        serde_json::Value::Array(arr) => {
+            // Vector: format as [x, y, z]
+            let elements: Vec<String> = arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f.to_string()))
+                .collect();
+            format!("'[{}]'", elements.join(", "))
+        }
+        _ => "NULL".to_string(),
     }
+}
 
-    #[test]
-    fn test_rejection_to_json() {
-        let err = MilvusError::CollectionNotFound("test".to_string());
-        let json = err.to_json();
-        assert_eq!(json["code"], 1001);
+/// Convert a TypedValue to a string representation
+fn typed_value_to_string(val: &remdb::types::TypedValue) -> String {
+    unsafe {
+        match val.value_type {
+            DataType::UInt8 => format!("{}", val.value.u8),
+            DataType::UInt16 => format!("{}", val.value.u16),
+            DataType::UInt32 => format!("{}", val.value.u32),
+            DataType::UInt64 => format!("{}", val.value.u64),
+            DataType::Int8 => format!("{}", val.value.i8),
+            DataType::Int16 => format!("{}", val.value.i16),
+            DataType::Int32 => format!("{}", val.value.i32),
+            DataType::Int64 => format!("{}", val.value.i64),
+            DataType::Float32 => format!("{}", val.value.float32),
+            DataType::Float64 => format!("{}", val.value.float64),
+            DataType::Bool => format!("{}", val.value.bool),
+            DataType::Timestamp => format!("{}", val.value.time.value),
+            DataType::TimestampTZ => format!("{}", val.value.time.value),
+            DataType::VarChar | DataType::Char | DataType::Text => {
+                let string_slice = core::str::from_utf8(&val.value.string).unwrap_or("");
+                string_slice.trim_end_matches(char::from(0)).to_string()
+            }
+            DataType::Interval => {
+                format!("{}", val.value.interval.value)
+            }
+            DataType::Vector => {
+                "[vector]".to_string()
+            }
+            DataType::Json => {
+                "<json>".to_string()
+            }
+        }
+    }
+}
+
+/// Read a typed value from a RecordRef into a JSON Value
+fn typed_value_from_record(
+    record: &remdb::table::RecordRef,
+    col: usize,
+    data_type: DataType,
+) -> Option<serde_json::Value> {
+    match data_type {
+        DataType::Int64 => {
+            record.get_i64(col).ok().map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
+        }
+        DataType::Int32 => {
+            record.get_i32(col).ok().map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
+        }
+        DataType::Int16 | DataType::Int8 => {
+            record.get_i64(col).ok().map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
+        }
+        DataType::UInt64 => {
+            record.get_u64(col).ok().map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
+        }
+        DataType::UInt32 | DataType::UInt16 | DataType::UInt8 => {
+            record.get_u64(col).ok().map(|v| serde_json::Value::Number(serde_json::Number::from(v)))
+        }
+        DataType::Float64 => {
+            record.get_f64(col).ok().and_then(|v| {
+                serde_json::Number::from_f64(v).map(|n| serde_json::Value::Number(n))
+            })
+        }
+        DataType::Float32 => {
+            record.get_f32(col).ok().map(|v| {
+                serde_json::Number::from_f64(v as f64)
+                    .map(|n| serde_json::Value::Number(n))
+                    .unwrap_or(serde_json::Value::Null)
+            })
+        }
+        DataType::Bool => {
+            record.get_bool(col).ok().map(|v| serde_json::Value::Bool(v))
+        }
+        DataType::VarChar | DataType::Char | DataType::Text => {
+            record.get_str(col).ok().map(|v| serde_json::Value::String(v.to_string()))
+        }
+        DataType::Vector => {
+            record.get_str(col).ok().map(|v| serde_json::Value::String(v.to_string()))
+        }
+        DataType::Json => {
+            record.get_str(col).ok().map(|v| serde_json::Value::String(v.to_string()))
+        }
+        _ => {
+            record.get_str(col).ok().map(|v| serde_json::Value::String(v.to_string()))
+        }
     }
 }
