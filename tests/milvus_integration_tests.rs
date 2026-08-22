@@ -576,6 +576,12 @@ async fn test_upsert_entity() {
 /// Minimal test: just initialize the global allocator (no database)
 #[tokio::test]
 async fn test_init_allocator_only() {
+    // If the shared DB is already initialized (earlier test in serial
+    // execution), skip — re-initializing the global allocator mid-process
+    // would corrupt the shared state.
+    if TEST_DB.get().is_some() {
+        return;
+    }
     let total_memory = 1024 * 1024 * 200; // 200 MB
     let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
     let memory_ptr = memory_vec.as_ptr() as *mut u8;
@@ -590,19 +596,20 @@ async fn test_init_allocator_only() {
 /// Minimal test: just initialize the database (no catalog, no routes)
 #[tokio::test]
 async fn test_init_db_only() {
+    // If the shared DB is already initialized, skip — re-initializing the
+    // global allocator and global DB mid-process would corrupt the shared state.
+    if TEST_DB.get().is_some() {
+        return;
+    }
     let total_memory = 1024 * 1024 * 200; // 200 MB
-    eprintln!("[PROBE] Step 1: allocating Vec...");
     let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
     let memory_ptr = memory_vec.as_ptr() as *mut u8;
     std::mem::forget(memory_vec);
-    eprintln!("[PROBE] Step 1 done");
 
-    eprintln!("[PROBE] Step 2: init_global_allocator...");
     unsafe {
         remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory)
             .expect("Failed to initialize global memory allocator");
     }
-    eprintln!("[PROBE] Step 2 done");
 
     // Now try building the app context
     let config = remdb_server::config::RuntimeConfig {
@@ -632,12 +639,10 @@ async fn test_init_db_only() {
         wal: remdb_server::config::WALConfig::default(),
         ddl_path: None,
     };
-    
-    eprintln!("[PROBE] Step 3: AppContextBuilder::build()...");
+
     let _ctx = remdb_server::context::AppContextBuilder::new()
         .with_config(config)
         .with_tables(vec![])
         .build()
         .expect("Failed to initialize test database");
-    eprintln!("[PROBE] Step 3 done");
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::result::Result;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use remdb::types::{DataType, DistanceType, IndexType, Value};
@@ -58,6 +59,8 @@ pub struct MilvusCatalog {
     db: Arc<Mutex<&'static mut RemDb>>,
     /// In-memory cache of collection_name → CatalogEntry
     cache: tokio::sync::RwLock<HashMap<String, CatalogEntry>>,
+    /// Atomically incrementing counter for collection IDs
+    next_id: AtomicI64,
 }
 
 impl MilvusCatalog {
@@ -70,6 +73,7 @@ impl MilvusCatalog {
         MilvusCatalog {
             db,
             cache: tokio::sync::RwLock::new(HashMap::new()),
+            next_id: AtomicI64::new(1),
         }
     }
 
@@ -93,8 +97,16 @@ impl MilvusCatalog {
             ("row_count", DataType::Int64, 0, None, None),
         ];
         {
-            let mut db = self.db.lock().unwrap();
-            let _ = db.create_table(CATALOG_TABLE, catalog_fields, Some(vec![0]));
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
+            match db.create_table(CATALOG_TABLE, catalog_fields, Some(vec![0])) {
+                Ok(()) => {}
+                Err(_) => {
+                    // Catalog table already exists (e.g., re-initialization);
+                    // refresh_cache below will load the existing entries.
+                }
+            }
         }
         // Refresh cache
         self.refresh_cache().await;
@@ -142,7 +154,7 @@ impl MilvusCatalog {
         }
 
         // 3. Get next collection_id
-        let collection_id = self.next_collection_id().await;
+        let collection_id = self.next_collection_id();
         let remdb_table = data_table_name(collection_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -151,7 +163,9 @@ impl MilvusCatalog {
 
         // 4. Create remdb table for this collection (synchronous, no await)
         let entry = {
-            let mut db = self.db.lock().unwrap();
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
 
             let mut remdb_fields: Vec<(&str, DataType, u16, Option<DistanceType>, Option<Value>)> =
                 Vec::new();
@@ -194,7 +208,10 @@ impl MilvusCatalog {
                 .map_err(|e| MilvusError::InternalError(format!("create table: {:?}", e)))?;
 
             // Create vector index on the vector field
-            let _ = db.create_index(&remdb_table, &vector_field, IndexType::Vector);
+            db.create_index(&remdb_table, &vector_field, IndexType::Vector)
+                .map_err(|e| {
+                    MilvusError::InternalError(format!("create vector index: {:?}", e))
+                })?;
 
             // 5. Insert into catalog table using SQL
             let schema_json = serde_json::to_string(&req.schema).unwrap_or_default();
@@ -219,7 +236,9 @@ impl MilvusCatalog {
                 escape_sql_string(&remdb_table),
                 now,
             );
-            let _ = db.sql_query(&sql);
+            db.sql_query(&sql).map_err(|e| {
+                MilvusError::InternalError(format!("catalog insert: {:?}", e))
+            })?;
 
             CatalogEntry {
                 collection_id,
@@ -250,16 +269,22 @@ impl MilvusCatalog {
     pub async fn drop_collection(&self, name: &str) -> Result<(), MilvusError> {
         let entry = self.resolve_collection(name).await?;
         {
-            let mut db = self.db.lock().unwrap();
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
             // Drop the data table
-            let _ = db.drop_table(&entry.remdb_table_name, true, false);
-            // Remove from catalog
+            db.drop_table(&entry.remdb_table_name, true, false).map_err(|e| {
+                MilvusError::InternalError(format!("drop table: {:?}", e))
+            })?;
+            // Remove from catalog using the numeric primary key for reliable matching
             let sql = format!(
-                "DELETE FROM {} WHERE collection_name = '{}'",
+                "DELETE FROM {} WHERE collection_id = {}",
                 CATALOG_TABLE,
-                escape_sql_string(name)
+                entry.collection_id
             );
-            let _ = db.sql_query(&sql);
+            db.sql_query(&sql).map_err(|e| {
+                MilvusError::InternalError(format!("catalog delete: {:?}", e))
+            })?;
         }
         // Update cache
         let mut cache = self.cache.write().await;
@@ -278,7 +303,9 @@ impl MilvusCatalog {
         }
         // Fall back to querying the catalog table
         let entry_opt = {
-            let mut db = self.db.lock().unwrap();
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
             let sql = format!(
                 "SELECT * FROM {} WHERE collection_name = '{}'",
                 CATALOG_TABLE,
@@ -287,12 +314,7 @@ impl MilvusCatalog {
             let result = db.sql_query(&sql)
                 .map_err(|_| MilvusError::CollectionNotFound(name.to_string()))?;
             // Parse the first row
-            if let Some(row) = result.rows.first() {
-                let entry = parse_catalog_row(row, &result.columns);
-                Some(entry)
-            } else {
-                None
-            }
+            result.rows.first().map(|row| parse_catalog_row(row, &result.columns))
         }; // db lock is dropped here
         if let Some(entry) = entry_opt {
             // Update cache
@@ -317,32 +339,44 @@ impl MilvusCatalog {
     }
 
     /// Get the next collection ID
-    async fn next_collection_id(&self) -> i64 {
-        let cache = self.cache.read().await;
-        let max_id = cache.values().map(|e| e.collection_id).max().unwrap_or(0);
-        max_id + 1
+    fn next_collection_id(&self) -> i64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
     /// Refresh the in-memory cache from the catalog table
     async fn refresh_cache(&self) {
         let entries = {
-            let mut db = self.db.lock().unwrap();
+            let mut db_lock = match self.db.lock() {
+                Ok(guard) => guard,
+                Err(_) => return, // lock poisoned; keep current cache
+            };
             let sql = format!("SELECT * FROM {}", CATALOG_TABLE);
-            if let Ok(result) = db.sql_query(&sql) {
-                let mut entries = Vec::new();
-                for row in &result.rows {
-                    let entry = parse_catalog_row(row, &result.columns);
-                    entries.push(entry);
+            match db_lock.sql_query(&sql) {
+                Ok(result) => {
+                    let mut entries = Vec::new();
+                    for row in &result.rows {
+                        let entry = parse_catalog_row(row, &result.columns);
+                        entries.push(entry);
+                    }
+                    entries
                 }
-                entries
-            } else {
-                Vec::new()
+                Err(_) => Vec::new(),
             }
         }; // db lock is dropped here
         let mut cache = self.cache.write().await;
         cache.clear();
+        let mut max_id = 0i64;
         for entry in entries {
+            if entry.collection_id > max_id {
+                max_id = entry.collection_id;
+            }
             cache.insert(entry.collection_name.clone(), entry);
+        }
+        // Ensure next_id is at least max_id + 1
+        let target = max_id + 1;
+        let current = self.next_id.load(Ordering::SeqCst);
+        if target > current {
+            self.next_id.store(target, Ordering::SeqCst);
         }
     }
 }
