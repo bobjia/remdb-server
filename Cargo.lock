@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "remdb-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1790,6 +1790,7 @@ dependencies = [
  "flume",
  "futures",
  "hex",
+ "libc",
  "log",
  "lz4",
  "metrics",
