@@ -105,7 +105,9 @@ pub async fn handle_insert(
     })?;
 
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
     let mut ids = Vec::new();
 
     for entity in &body.data {
@@ -138,44 +140,93 @@ pub async fn handle_insert(
                 entry.remdb_table_name, cols, vals
             );
             let result = db_guard.sql_query(&sql)
-                .map_err(|e| warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e))))?;
-            // Get the last inserted ID from the result (second column: last_insert_id)
-            let last_insert_id = if let Some(row) = result.rows.first() {
-                if let Some(val) = row.values.get(1) {
-                    unsafe {
-                        val.value.u64 as i64
+                .map_err(|e| {
+                    warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e)))
+                })?;
+
+            // The INSERT result's second column carries the record slot id.
+            // Note: the slot id is NOT the primary key value when auto_id is
+            // enabled (auto-increment starts at max_pk + 1), so we must read
+            // the generated primary key back from the stored record.
+            let slot_id = result
+                .rows
+                .first()
+                .and_then(|row| row.values.get(1))
+                .map(|val| unsafe { val.value.u64 })
+                .ok_or_else(|| {
+                    warp::reject::custom(MilvusError::InsertFailed(
+                        "insert returned no record id".to_string(),
+                    ))
+                })? as usize;
+
+            // Read back the generated primary key and update the vector index
+            // for the inserted record in a single borrow scope.
+            let pk_value = {
+                let (table, sec_idx) = db_guard
+                    .get_table_and_secondary_index_mut_by_name(&entry.remdb_table_name)
+                    .map_err(|_| {
+                        warp::reject::custom(MilvusError::InternalError(
+                            "collection table not found after insert".to_string(),
+                        ))
+                    })?;
+
+                // Read the primary key value from the inserted record.
+                let pk_field_index = table
+                    .def
+                    .fields
+                    .iter()
+                    .position(|f| f.name == entry.primary_field)
+                    .ok_or_else(|| {
+                        warp::reject::custom(MilvusError::InternalError(
+                            "primary key field not found".to_string(),
+                        ))
+                    })?;
+                let record_ptr = unsafe { table.get_record_ptr(slot_id) };
+                let pk_value = unsafe { table.get_field(record_ptr, pk_field_index) }
+                    .map_err(|e| {
+                        warp::reject::custom(MilvusError::InsertFailed(format!(
+                            "read back primary key failed: {:?}",
+                            e
+                        )))
+                    })?;
+                let pk_field_type = table
+                    .def
+                    .fields
+                    .get(pk_field_index)
+                    .map(|f| f.data_type)
+                    .unwrap_or(DataType::Int64);
+                let pk_value = value_to_i64(pk_value, pk_field_type);
+
+                // Update the vector index using the collection's configured
+                // vector field name (not a hard-coded key).
+                if let Some(obj) = entity.as_object() {
+                    if let Some(vector_val) = obj.get(&entry.vector_field) {
+                        if let Some(vector_arr) = vector_val.as_array() {
+                            // Convert the vector array to raw f32 bytes
+                            let dim = vector_arr.len();
+                            let mut key = Vec::with_capacity(dim.saturating_mul(4));
+                            for val in vector_arr {
+                                let f = val.as_f64().unwrap_or(0.0) as f32;
+                                key.extend_from_slice(&f.to_le_bytes());
+                            }
+
+                            unsafe {
+                                sec_idx
+                                    .insert(key.as_ptr(), key.len(), slot_id as u16)
+                                    .map_err(|e| {
+                                        warp::reject::custom(MilvusError::InsertFailed(
+                                            format!("{:?}", e),
+                                        ))
+                                    })?;
+                            }
+                        }
                     }
-                } else {
-                    0
                 }
-            } else {
-                0
+
+                pk_value
             };
-            ids.push(last_insert_id);
 
-            // Update the secondary index (vector index) for the inserted record
-            if let Some(obj) = entity.as_object() {
-                if let Some(vector_val) = obj.get("vector") {
-                    if let Some(vector_arr) = vector_val.as_array() {
-                        // Get the table and secondary index
-                        let (_table, sec_idx) = db_guard.get_table_and_secondary_index_mut_by_name(&entry.remdb_table_name)
-                            .map_err(|_| warp::reject::custom(MilvusError::SearchFailed("collection not found".to_string())))?;
-
-                        // Convert the vector array to raw f32 bytes
-                        let dim = vector_arr.len();
-                        let mut key = Vec::with_capacity(dim * 4);
-                        for val in vector_arr {
-                            let f = val.as_f64().unwrap_or(0.0) as f32;
-                            key.extend_from_slice(&f.to_le_bytes());
-                        }
-
-                        unsafe {
-                            sec_idx.insert(key.as_ptr(), key.len(), last_insert_id as u16)
-                                .map_err(|e| warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e))))?;
-                        }
-                    }
-                }
-            }
+            ids.push(pk_value);
         }
     }
 
@@ -195,7 +246,9 @@ pub async fn handle_upsert(
         warp::reject::custom(e)
     })?;
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
     let mut ids = Vec::new();
 
     for entity in &body.data {
@@ -209,9 +262,15 @@ pub async fn handle_upsert(
             "SELECT {} FROM {} WHERE {} = {}",
             entry.primary_field, entry.remdb_table_name, entry.primary_field, pk_value
         );
-        let exists = db_guard.sql_query(&check_sql)
-            .map(|r| !r.rows.is_empty())
-            .unwrap_or(false);
+        let exists = match db_guard.sql_query(&check_sql) {
+            Ok(r) => !r.rows.is_empty(),
+            Err(e) => {
+                return Err(warp::reject::custom(MilvusError::InternalError(format!(
+                    "{:?}",
+                    e
+                ))));
+            }
+        };
 
         if exists {
             // UPDATE
@@ -232,7 +291,9 @@ pub async fn handle_upsert(
                     entry.primary_field,
                     pk_value
                 );
-                let _ = db_guard.sql_query(&sql);
+                db_guard.sql_query(&sql).map_err(|e| {
+                    warp::reject::custom(MilvusError::InternalError(format!("{:?}", e)))
+                })?;
             }
             ids.push(pk_value);
         } else {
@@ -252,7 +313,9 @@ pub async fn handle_upsert(
                 col_names.join(", "),
                 col_values.join(", ")
             );
-            let _ = db_guard.sql_query(&sql);
+            db_guard.sql_query(&sql).map_err(|e| {
+                warp::reject::custom(MilvusError::InsertFailed(format!("{:?}", e)))
+            })?;
             ids.push(pk_value);
         }
     }
@@ -273,7 +336,9 @@ pub async fn handle_delete(
         warp::reject::custom(e)
     })?;
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
     let filter = if body.filter.is_empty() {
         String::new()
     } else {
@@ -310,13 +375,17 @@ pub async fn handle_get(
         warp::reject::custom(e)
     })?;
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
     let sql = format!(
         "SELECT * FROM {} WHERE {} = {}",
         entry.remdb_table_name, entry.primary_field, body.id
     );
     let result = db_guard.sql_query(&sql)
-        .map_err(|e| warp::reject::custom(MilvusError::InternalError(format!("{:?}", e))))?;
+        .map_err(|e| {
+            warp::reject::custom(MilvusError::InternalError(format!("{:?}", e)))
+        })?;
 
     if let Some(row) = result.rows.first() {
         let mut entity = serde_json::Map::new();
@@ -329,7 +398,10 @@ pub async fn handle_get(
         let response = MilvusResponse::success(serde_json::Value::Object(entity));
         Ok(warp::reply::json(&response))
     } else {
-        Err(warp::reject::custom(MilvusError::CollectionNotFound(body.collection_name.clone())))
+        // Record not found is not an error in Milvus semantics; return an
+        // empty result instead of mis-reporting the collection as missing.
+        let response = MilvusResponse::success(serde_json::Value::Null);
+        Ok(warp::reply::json(&response))
     }
 }
 
@@ -341,7 +413,9 @@ pub async fn handle_query(
         warp::reject::custom(e)
     })?;
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
 
     let fields = body.output_fields.as_ref()
         .map(|f| f.join(", "))
@@ -359,7 +433,9 @@ pub async fn handle_query(
         fields, entry.remdb_table_name, filter, limit, offset
     );
     let result = db_guard.sql_query(&sql)
-        .map_err(|e| warp::reject::custom(MilvusError::InternalError(format!("{:?}", e))))?;
+        .map_err(|e| {
+            warp::reject::custom(MilvusError::InternalError(format!("{:?}", e)))
+        })?;
 
     let mut rows_json = Vec::new();
     for row in &result.rows {
@@ -386,7 +462,9 @@ pub async fn handle_search(
     })?;
     let k = body.limit.unwrap_or(10);
     let db = catalog.db();
-    let mut db_guard = db.lock().unwrap();
+    let mut db_guard = db.lock().map_err(|_| {
+        warp::reject::custom(MilvusError::InternalError("database lock poisoned".to_string()))
+    })?;
 
     // Get the table and secondary index
     let (table, sec_idx) = db_guard.get_table_and_secondary_index_mut_by_name(&entry.remdb_table_name)
@@ -476,6 +554,23 @@ pub async fn handle_rejection(err: warp::Rejection) -> Result<impl Reply, Infall
 }
 
 // ── Helper functions ──
+
+/// Interpret a union `Value` as an i64 based on the field's data type.
+fn value_to_i64(val: remdb::types::Value, data_type: DataType) -> i64 {
+    unsafe {
+        match data_type {
+            DataType::Int64 => val.i64,
+            DataType::Int32 => val.i32 as i64,
+            DataType::Int16 => val.i16 as i64,
+            DataType::Int8 => val.i8 as i64,
+            DataType::UInt64 => val.u64 as i64,
+            DataType::UInt32 => val.u32 as i64,
+            DataType::UInt16 => val.u16 as i64,
+            DataType::UInt8 => val.u8 as i64,
+            _ => 0,
+        }
+    }
+}
 
 /// Convert a JSON value to a SQL string representation
 fn json_value_to_sql(val: &serde_json::Value) -> String {
