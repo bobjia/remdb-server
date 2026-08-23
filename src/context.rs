@@ -138,6 +138,7 @@ impl AppContextBuilder {
                 master_port: config.ha.master_port,
                 replication_port: config.ha.replication_port.unwrap_or(6668),
             }),
+            model_worker_config: remdb::config::ModelWorkerConfig::default(),
         }));
 
         unsafe {

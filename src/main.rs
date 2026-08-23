@@ -459,8 +459,9 @@ async fn main() {
             master_port: ha_master_port,
             replication_port: ha_replication_port.unwrap_or(6668), // 默认复制端口
                                                                    // 默认心跳端口
-        }),
-    }));
+            }),
+            model_worker_config: remdb::config::ModelWorkerConfig::default(),
+        }));
 
     // 初始化全局内存分配器，这是关键的一步！
     let total_memory = config.total_memory;
