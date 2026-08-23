@@ -22,6 +22,27 @@ static INIT_DB: Once = Once::new();
 static TEST_DB: OnceLock<Arc<Mutex<&'static mut RemDb>>> = OnceLock::new();
 static SHARED_CATALOG: OnceLock<Arc<MilvusCatalog>> = OnceLock::new();
 
+/// Initialize the global memory allocator exactly once.
+///
+/// Tests run in parallel threads, so several tests may reach the init path at
+/// once. A second `init_global_allocator` call would clobber the allocator and
+/// corrupt shared state (segfault), so every init path must go through this
+/// `Once` guard.
+fn init_global_allocator_once() {
+    static INIT_ALLOCATOR: Once = Once::new();
+    INIT_ALLOCATOR.call_once(|| {
+        let total_memory = 1024 * 1024 * 200; // 200 MB
+        let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
+        let memory_ptr = memory_vec.as_ptr() as *mut u8;
+        std::mem::forget(memory_vec);
+
+        unsafe {
+            remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory)
+                .expect("Failed to initialize global memory allocator");
+        }
+    });
+}
+
 /// Initialize the global database once for all tests.
 fn init_test_db() -> Arc<Mutex<&'static mut RemDb>> {
     INIT_DB.call_once(|| {
@@ -61,14 +82,7 @@ fn init_test_db() -> Arc<Mutex<&'static mut RemDb>> {
         };
 
         // Initialize global memory allocator (required before database init)
-        let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
-        let memory_ptr = memory_vec.as_ptr() as *mut u8;
-        std::mem::forget(memory_vec);
-
-        unsafe {
-            remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory)
-                .expect("Failed to initialize global memory allocator");
-        }
+        init_global_allocator_once();
 
         let ctx = remdb_server::context::AppContextBuilder::new()
             .with_config(config)
@@ -573,76 +587,19 @@ async fn test_upsert_entity() {
     let _ = test_request(&routes, "POST", "/v2/vectordb/collections/drop", Some(drop_body)).await;
 }
 
-/// Minimal test: just initialize the global allocator (no database)
+/// Minimal test: the global allocator initializes exactly once, even under
+/// concurrent test execution.
 #[tokio::test]
 async fn test_init_allocator_only() {
-    // If the shared DB is already initialized (earlier test in serial
-    // execution), skip — re-initializing the global allocator mid-process
-    // would corrupt the shared state.
-    if TEST_DB.get().is_some() {
-        return;
-    }
-    let total_memory = 1024 * 1024 * 200; // 200 MB
-    let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
-    let memory_ptr = memory_vec.as_ptr() as *mut u8;
-    std::mem::forget(memory_vec);
-
-    unsafe {
-        remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory)
-            .expect("Failed to initialize global memory allocator");
-    }
+    init_global_allocator_once();
 }
 
-/// Minimal test: just initialize the database (no catalog, no routes)
+/// Minimal test: the shared database (built once for all tests) initializes.
 #[tokio::test]
 async fn test_init_db_only() {
-    // If the shared DB is already initialized, skip — re-initializing the
-    // global allocator and global DB mid-process would corrupt the shared state.
-    if TEST_DB.get().is_some() {
-        return;
-    }
-    let total_memory = 1024 * 1024 * 200; // 200 MB
-    let memory_vec: Vec<u8> = Vec::with_capacity(total_memory);
-    let memory_ptr = memory_vec.as_ptr() as *mut u8;
-    std::mem::forget(memory_vec);
-
-    unsafe {
-        remdb::memory::allocator::init_global_allocator(memory_ptr, total_memory)
-            .expect("Failed to initialize global memory allocator");
-    }
-
-    // Now try building the app context
-    let config = remdb_server::config::RuntimeConfig {
-        snapshot_dir: Some("./test_snapshots".to_string()),
-        full_image: None,
-        total_memory,
-        default_max_records: 1000,
-        low_power_mode_supported: true,
-        low_power_max_records: None,
-        log_path: None,
-        log_file_name: "./test_logs/test.log".to_string(),
-        snapshot_interval: None,
-        snapshot_type: None,
-        max_incremental_snapshots: None,
-        debug_mode: true,
-        jdbc: remdb_server::config::JdbcConfig {
-            port: Some(16666),
-            enabled: Some(true),
-            max_connections: Some(10),
-            timeout: Some(30),
-            auth_enabled: Some(false),
-            username: None,
-            password_hash: None,
-        },
-        pubsub: remdb_server::config::PubSubConfig::default(),
-        ha: remdb_server::config::HaConfig::default(),
-        wal: remdb_server::config::WALConfig::default(),
-        ddl_path: None,
-    };
-
-    let _ctx = remdb_server::context::AppContextBuilder::new()
-        .with_config(config)
-        .with_tables(vec![])
-        .build()
-        .expect("Failed to initialize test database");
+    init_test_db();
+    assert!(
+        TEST_DB.get().is_some(),
+        "shared test database should be initialized"
+    );
 }
