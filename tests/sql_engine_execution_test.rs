@@ -134,9 +134,13 @@ fn test_duplicate_create_database_errors() {
     let db = setup().unwrap();
 
     execute_extended_sql(db, "create database demo").unwrap();
-    // 重复创建应返回数据库层错误，而不是 Unsupported
-    let result = execute_extended_sql(db, "create database demo");
-    assert!(result.is_err(), "duplicate create database should fail");
+    // 重复创建应返回 DatabaseExists，而不是 Unsupported 或 InternalError
+    let err = execute_extended_sql(db, "create database demo").unwrap_err();
+    assert!(
+        matches!(err, SqlError::Database(remdb::RemDbError::DatabaseExists)),
+        "expected DatabaseExists, got {:?}",
+        err
+    );
 }
 
 #[test]
@@ -166,23 +170,14 @@ fn test_close_database() {
 }
 
 #[test]
-fn test_use_database_dispatches() {
+fn test_use_database_succeeds() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let db = setup().unwrap();
 
     execute_extended_sql(db, "create database demo").unwrap();
 
-    // 路由层保证：use database 会被识别并分发到核心执行器，而不是 Unsupported。
-    // 已知限制：核心的多数据库生命周期尚未完成——新建数据库的状态保持为
-    // Created 而非 Open，因此 use_database 目前返回 DatabaseClosed（映射为
-    // SqlError::Database）。若未来核心修复该问题，此命令应返回 Ok。
-    match execute_extended_sql(db, "use database demo") {
-        Ok(_) => {}
-        Err(SqlError::Unsupported) => {
-            panic!("use database should be routed, not Unsupported")
-        }
-        Err(_) => {}
-    }
+    // 新建的数据库（状态为 Created）应可直接切换使用
+    execute_extended_sql(db, "use database demo").unwrap();
 }
 
 #[test]
