@@ -36,7 +36,9 @@
       "Bash(cargo test --lib check_layout -- --nocapture)",
       "Bash(python -m pytest tests/unit/ --tb=no -q)",
       "Bash(python -m pytest tests/unit/ -q)",
-      "Bash(python -m pytest tests/unit/test_indexes.py -v --tb=short)"
+      "Bash(python -m pytest tests/unit/test_indexes.py -v --tb=short)",
+      "Bash(cargo test *)",
+      "Bash(git checkout *)"
     ]
   }
 }
