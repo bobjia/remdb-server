@@ -43,6 +43,14 @@ impl SqlParser {
             Ok(QueryType::Export)
         } else if sql_trimmed.starts_with("show databases") || sql_trimmed == "databases" {
             Ok(QueryType::Databases)
+        } else if sql_trimmed.starts_with("create database") {
+            Ok(QueryType::CreateDatabase)
+        } else if sql_trimmed.starts_with("drop database") {
+            Ok(QueryType::DropDatabase)
+        } else if sql_trimmed.starts_with("use database") {
+            Ok(QueryType::UseDatabase)
+        } else if sql_trimmed.starts_with("close database") {
+            Ok(QueryType::CloseDatabase)
         } else {
             Err(SqlError::Unsupported)
         }
@@ -164,6 +172,38 @@ mod tests {
         assert_eq!(
             SqlParser::detect_query_type("DELETE FROM users WHERE id = 1").unwrap(),
             QueryType::Delete
+        );
+    }
+
+    #[test]
+    fn test_detect_query_type_create_database() {
+        assert_eq!(
+            SqlParser::detect_query_type("CREATE DATABASE demo").unwrap(),
+            QueryType::CreateDatabase
+        );
+    }
+
+    #[test]
+    fn test_detect_query_type_drop_database() {
+        assert_eq!(
+            SqlParser::detect_query_type("DROP DATABASE demo").unwrap(),
+            QueryType::DropDatabase
+        );
+    }
+
+    #[test]
+    fn test_detect_query_type_use_database() {
+        assert_eq!(
+            SqlParser::detect_query_type("USE DATABASE demo").unwrap(),
+            QueryType::UseDatabase
+        );
+    }
+
+    #[test]
+    fn test_detect_query_type_close_database() {
+        assert_eq!(
+            SqlParser::detect_query_type("CLOSE DATABASE demo").unwrap(),
+            QueryType::CloseDatabase
         );
     }
 

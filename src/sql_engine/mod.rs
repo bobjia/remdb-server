@@ -97,6 +97,10 @@ pub enum QueryType {
     HealthCheck,
     Export,
     Databases,
+    CreateDatabase,
+    DropDatabase,
+    UseDatabase,
+    CloseDatabase,
 }
 
 pub fn execute_extended_sql(db: &mut remdb::RemDb, sql: &str) -> SqlResult<ResultSet> {
@@ -122,8 +126,8 @@ fn execute_single(db: &mut remdb::RemDb, sql: &str) -> SqlResult<ResultSet> {
         QueryType::Select
         | QueryType::ShowTables
         | QueryType::Describe
-        | QueryType::HealthCheck
-        | QueryType::Databases => SelectExecutor::execute(db, sql),
+        | QueryType::HealthCheck => SelectExecutor::execute(db, sql),
+        QueryType::Databases => execute_databases_query(db),
         QueryType::Insert => InsertExecutor::execute(db, sql),
         QueryType::Update => UpdateExecutor::execute(db, sql),
         QueryType::Delete => DeleteExecutor::execute(db, sql),
@@ -136,8 +140,37 @@ fn execute_single(db: &mut remdb::RemDb, sql: &str) -> SqlResult<ResultSet> {
             db.sql_query(sql)?;
             Ok(ResultSet::new())
         }
+        QueryType::CreateDatabase
+        | QueryType::DropDatabase
+        | QueryType::UseDatabase
+        | QueryType::CloseDatabase => {
+            db.sql_query(sql)?;
+            Ok(ResultSet::new())
+        }
         QueryType::Explain | QueryType::Export => Ok(ResultSet::new()),
     }
+}
+
+/// 执行SHOW DATABASES查询
+fn execute_databases_query(db: &mut remdb::RemDb) -> SqlResult<ResultSet> {
+    let databases = db.databases()?;
+    let mut result = ResultSet::with_columns(vec![
+        "name".into(),
+        "database_type".into(),
+        "status".into(),
+        "table_count".into(),
+        "memory_usage".into(),
+    ]);
+    for info in databases {
+        result.rows.push(vec![
+            info.name,
+            info.database_type,
+            format!("{:?}", info.status),
+            info.table_count.to_string(),
+            info.memory_usage.to_string(),
+        ]);
+    }
+    Ok(result)
 }
 
 pub fn format_result_set(result: &ResultSet) -> String {
