@@ -1752,6 +1752,8 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "remdb"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88a07a7dfaf0759b09b9b99eeae3e7b6531711c2afde9e17d0f79ce21f985da7"
 dependencies = [
  "cc",
  "lazy_static",
@@ -1767,6 +1769,8 @@ dependencies = [
 [[package]]
 name = "remdb-macros"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300a6f7fd4d0d5524888be6962da387ef95925461106f33cf8f0110a6e779cc2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1805,7 +1809,6 @@ dependencies = [
  "rand",
  "rayon",
  "remdb",
- "remdb-macros",
  "rustyline",
  "rustyline-derive",
  "serde",
