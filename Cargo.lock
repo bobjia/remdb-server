@@ -1751,9 +1751,9 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "remdb"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88a07a7dfaf0759b09b9b99eeae3e7b6531711c2afde9e17d0f79ce21f985da7"
+checksum = "e9ebffc81ee142ee19017674d65b697c726675fe434e7914bceece02d364f4c1"
 dependencies = [
  "cc",
  "lazy_static",
