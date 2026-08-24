@@ -1,0 +1,12 @@
+# remdb-server 默认配置
+# 此文件由 systemd 的 EnvironmentFile 加载
+# 修改后需要重启服务: sudo systemctl restart remdb-server
+
+# 日志级别 (trace, debug, info, warn, error)
+RUST_LOG=info
+
+# 错误回溯
+RUST_BACKTRACE=1
+
+# 调试模式 (true/false)
+REMDB_DEBUG=false

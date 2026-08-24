@@ -1,0 +1,43 @@
+[Unit]
+Description=remdb-server - High-performance embedded in-memory database
+Documentation=https://github.com/remdb/remdb-server
+After=network.target
+
+[Service]
+Type=simple
+User=remdb
+Group=remdb
+
+# 环境变量
+EnvironmentFile=-/etc/remdb/remdb-server.conf
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# 启动命令
+ExecStart=/usr/local/bin/remdb-server --config /etc/remdb/remdb-master.toml
+ExecReload=/bin/kill -HUP $MAINPID
+
+# 工作目录
+WorkingDirectory=/var/lib/remdb
+
+# 安全限制
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/remdb /var/log/remdb
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# 重启策略
+Restart=on-failure
+RestartSec=5
+
+# 超时设置
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

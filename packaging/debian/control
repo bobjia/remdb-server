@@ -1,0 +1,26 @@
+Source: remdb-server
+Section: database
+Priority: optional
+Maintainer: remdb Team <support@remdb.dev>
+Build-Depends: debhelper (>= 9), rustc (>= 1.70), cargo (>= 1.70), libssl-dev, pkg-config
+
+Package: remdb-server
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser
+Description: High-performance embedded in-memory database server
+ remdb-server is a high-performance embedded in-memory database server
+ with the following features:
+  * ACID transactions with WAL
+  * SQL query execution
+  * Vector indexes (HNSW, IVF)
+  * Time-series storage
+  * JSON document store
+  * Role-based access control (RBAC)
+  * PubSub messaging (UDP-based)
+  * HA master-slave replication
+  * ONNX model inference
+  * JDBC protocol support
+  * Prometheus monitoring
+  * Milvus-compatible REST API
+ .
+ This package contains the remdb-server daemon and the remdbcli CLI tool.

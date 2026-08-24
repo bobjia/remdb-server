@@ -83,3 +83,35 @@ prost-build = "0.12"
 [features]
 # 零拷贝网络传输支持
 zerocopy = []
+
+# Debian 打包配置 (cargo-deb)
+[package.metadata.deb]
+name = "remdb-server"
+maintainer = "remdb Team <support@remdb.dev>"
+copyright = "2024 remdb Team"
+license-file = "LICENSE"
+extended-description = """\
+remdb-server is a high-performance embedded in-memory database server \
+with ACID transactions, SQL execution, vector indexes, time-series storage, \
+JSON document store, RBAC, PubSub, HA replication, and ONNX model inference.
+
+This package contains the remdb-server daemon and the remdbcli CLI tool.
+"""
+section = "database"
+priority = "optional"
+assets = [
+    ["target/release/remdb-server", "usr/bin/", "755"],
+    ["target/release/remdbcli", "usr/bin/", "755"],
+    ["remdb-master.toml", "usr/share/remdb/", "644"],
+    ["remdb-slave.toml", "usr/share/remdb/", "644"],
+    ["schema.ddl", "usr/share/remdb/schema/", "644"],
+    ["README.md", "usr/share/doc/remdb-server/", "644"],
+    ["LICENSE", "usr/share/doc/remdb-server/", "644"],
+    ["SPEC.md", "usr/share/doc/remdb-server/", "644"],
+    ["PERFORMANCE_TUNING.md", "usr/share/doc/remdb-server/", "644"],
+    ["packaging/remdb-server.service", "lib/systemd/system/", "644"],
+    ["packaging/remdb-server.default", "etc/remdb/", "644"],
+    ["packaging/install.sh", "usr/share/remdb/", "755"],
+]
+depends = "$auto"
+maintainer-scripts = "packaging/debian/"
