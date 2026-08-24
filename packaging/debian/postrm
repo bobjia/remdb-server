@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# remdb-server postrm — 卸载后清理
+#
+
+set -e
+
+case "$1" in
+    remove|purge)
+        # 重新加载 systemd
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+
+        # 完全清除时删除用户和数据
+        if [ "$1" = "purge" ]; then
+            if getent passwd remdb >/dev/null 2>&1; then
+                userdel -r remdb 2>/dev/null || true
+            fi
+            rm -rf /var/lib/remdb
+            rm -rf /var/log/remdb
+            rm -rf /etc/remdb
+            echo "remdb-server 已完全清除。"
+        else
+            echo "remdb-server 已卸载。数据保留在 /var/lib/remdb"
+            echo "如需完全清除，请执行: sudo apt purge remdb-server"
+        fi
+        ;;
+esac

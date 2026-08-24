@@ -1,0 +1,19 @@
+#!/bin/bash
+#
+# remdb-server prerm — 卸载前清理
+#
+
+set -e
+
+case "$1" in
+    remove|purge|upgrade|deconfigure)
+        # 停止服务
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-active --quiet remdb-server 2>/dev/null; then
+                echo "正在停止 remdb-server 服务..."
+                systemctl stop remdb-server
+                systemctl disable remdb-server 2>/dev/null || true
+            fi
+        fi
+        ;;
+esac

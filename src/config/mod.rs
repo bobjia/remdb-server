@@ -58,14 +58,28 @@ pub struct SnapshotConfig {
     pub max_incremental_snapshots: Option<usize>,
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct MilvusConfig {
-    #[serde(default)]
+    #[serde(default = "default_milvus_enabled")]
     pub enabled: bool,
     #[serde(default = "default_milvus_port")]
     pub port: u16,
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+impl Default for MilvusConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_milvus_enabled(),
+            port: default_milvus_port(),
+            api_key: None,
+        }
+    }
+}
+
+fn default_milvus_enabled() -> bool {
+    true
 }
 
 fn default_milvus_port() -> u16 {

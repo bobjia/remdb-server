@@ -1,0 +1,44 @@
+#!/bin/bash
+#
+# remdb-server postinst — 安装后配置
+#
+
+set -e
+
+case "$1" in
+    configure)
+        # 创建 remdb 用户
+        if ! getent passwd remdb >/dev/null 2>&1; then
+            adduser --system --group --no-create-home --quiet \
+                --home /var/lib/remdb \
+                --shell /usr/sbin/nologin \
+                --gecos "remdb-server system user" remdb
+        fi
+
+        # 创建数据目录
+        mkdir -p /var/lib/remdb
+        mkdir -p /var/log/remdb
+        mkdir -p /etc/remdb
+
+        # 设置权限
+        chown -R remdb:remdb /var/lib/remdb /var/log/remdb
+
+        # 复制默认配置（如果不存在）
+        if [ ! -f /etc/remdb/remdb-master.toml ]; then
+            cp /usr/share/remdb/remdb-master.toml /etc/remdb/remdb-master.toml 2>/dev/null || true
+        fi
+        if [ ! -f /etc/remdb/remdb-slave.toml ]; then
+            cp /usr/share/remdb/remdb-slave.toml /etc/remdb/remdb-slave.toml 2>/dev/null || true
+        fi
+
+        # 重新加载 systemd
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        echo "remdb-server 安装完成!"
+        echo "  启动: sudo systemctl start remdb-server"
+        echo "  状态: sudo systemctl status remdb-server"
+        echo "  CLI:  remdbcli"
+        ;;
+esac
