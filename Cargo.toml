@@ -16,7 +16,7 @@ name = "remdb_server"
 path = "src/lib.rs"
 
 [dependencies]
-remdb = { path = "../remdb", default-features = true }
+remdb = { path = "../remdb", default-features = true, features = ["model-runtime"] }
 rustyline = "12.0.0"
 rustyline-derive = "0.11.0"
 clap = { version = "4.5.0", features = ["derive"] }
