@@ -35,6 +35,13 @@ pub enum MilvusError {
     SearchFailed(String),
     AuthenticationFailed,
     InternalError(String),
+    // ── Embedding errors ──
+    ModelNotFound(String),
+    InvalidInput(String),
+    InputTooLong(usize),
+    ModelLoadFailed(String),
+    InferenceFailed(String),
+    NoModelSpecified,
 }
 
 impl MilvusError {
@@ -52,6 +59,12 @@ impl MilvusError {
             MilvusError::SearchFailed(_) => 1009,
             MilvusError::AuthenticationFailed => 2001,
             MilvusError::InternalError(_) => 9999,
+            MilvusError::ModelNotFound(_) => 1,
+            MilvusError::InvalidInput(_) => 2,
+            MilvusError::InputTooLong(_) => 3,
+            MilvusError::ModelLoadFailed(_) => 4,
+            MilvusError::InferenceFailed(_) => 5,
+            MilvusError::NoModelSpecified => 6,
         }
     }
 
@@ -59,6 +72,12 @@ impl MilvusError {
         match self {
             MilvusError::AuthenticationFailed => 401,
             MilvusError::InternalError(_) => 500,
+            MilvusError::ModelNotFound(_) => 404,
+            MilvusError::InvalidInput(_) => 400,
+            MilvusError::InputTooLong(_) => 400,
+            MilvusError::ModelLoadFailed(_) => 500,
+            MilvusError::InferenceFailed(_) => 500,
+            MilvusError::NoModelSpecified => 400,
             _ => 400,
         }
     }
@@ -77,6 +96,12 @@ impl MilvusError {
             MilvusError::SearchFailed(msg) => format!("search failed: {}", msg),
             MilvusError::AuthenticationFailed => "authentication failed".to_string(),
             MilvusError::InternalError(msg) => format!("internal error: {}", msg),
+            MilvusError::ModelNotFound(name) => format!("Model '{}' not found", name),
+            MilvusError::InvalidInput(msg) => format!("Invalid input: {}", msg),
+            MilvusError::InputTooLong(max) => format!("Input exceeds maximum length of {} tokens", max),
+            MilvusError::ModelLoadFailed(msg) => format!("Failed to load model: {}", msg),
+            MilvusError::InferenceFailed(msg) => format!("Inference failed: {}", msg),
+            MilvusError::NoModelSpecified => "No model specified and no default model configured".to_string(),
         }
     }
 
