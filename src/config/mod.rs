@@ -66,6 +66,8 @@ pub struct MilvusConfig {
     pub port: u16,
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub embedding: Option<EmbeddingConfig>,
 }
 
 impl Default for MilvusConfig {
@@ -74,6 +76,7 @@ impl Default for MilvusConfig {
             enabled: default_milvus_enabled(),
             port: default_milvus_port(),
             api_key: None,
+            embedding: None,
         }
     }
 }
@@ -84,6 +87,40 @@ fn default_milvus_enabled() -> bool {
 
 fn default_milvus_port() -> u16 {
     19530
+}
+
+fn default_models_dir() -> String {
+    "./models".to_string()
+}
+
+fn default_max_models() -> usize {
+    5
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct EmbeddingConfig {
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default = "default_models_dir")]
+    pub models_dir: String,
+    #[serde(default)]
+    pub auto_download: bool,
+    #[serde(default = "default_max_models")]
+    pub max_models: usize,
+    #[serde(default)]
+    pub hf_mirror: Option<String>,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            default_model: None,
+            models_dir: default_models_dir(),
+            auto_download: false,
+            max_models: default_max_models(),
+            hf_mirror: None,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
