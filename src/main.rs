@@ -679,11 +679,30 @@ async fn main() {
         let milvus_db = db_arc.clone();
         let milvus_port = args.milvus_port;
         let milvus_api_key = args.milvus_api_key.clone().or(milvus_config_saved.api_key.clone());
+
+        // Create embedding engine if embedding config is present
+        let embedding_engine = if let Some(ref emb_config) = milvus_config_saved.embedding {
+            let engine = remdb::model::embedding::EmbeddingEngine::new(
+                emb_config.default_model.clone(),
+                emb_config.models_dir.clone(),
+                emb_config.max_models,
+                emb_config.auto_download,
+                emb_config.hf_mirror.clone(),
+            );
+            if let Err(e) = engine.preload_default() {
+                error!("Failed to pre-load default embedding model: {:?}", e);
+            }
+            Some(Arc::new(engine))
+        } else {
+            None
+        };
+
         tokio::spawn(async move {
             let server = remdb_server::milvus::MilvusServer::new(
                 milvus_db,
                 milvus_port,
                 milvus_api_key,
+                embedding_engine,
             );
             server.start().await;
         });
