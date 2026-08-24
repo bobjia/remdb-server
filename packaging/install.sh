@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # 安装路径
-PREFIX="${PREFIX:-/usr/local}"
+PREFIX="${PREFIX:-/usr}"
 BIN_DIR="${PREFIX}/bin"
 ETC_DIR="/etc/remdb"
 SYSTEMD_DIR="/lib/systemd/system"
