@@ -108,3 +108,20 @@ sync_timeout_ms = 2000
 
 # 复制端口（用于WAL日志复制和数据同步）
 replication_port = 6668
+
+# Milvus REST API configuration
+[milvus]
+enabled = true
+port = 19530
+
+[milvus.embedding]
+# Default model used when request omits "model" field
+default_model = "bge-m3"
+# Directory where ONNX model files are stored
+models_dir = "./models"
+# Auto-download model from HuggingFace if not found locally
+auto_download = false
+# Maximum number of models to keep in memory cache
+max_models = 5
+# HuggingFace mirror URL (overrides HF_MIRROR env var)
+# hf_mirror = "https://hf-mirror.com"
