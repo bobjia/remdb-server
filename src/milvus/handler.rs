@@ -608,9 +608,13 @@ fn typed_value_to_string(val: &remdb::types::TypedValue) -> String {
             DataType::Bool => format!("{}", val.value.bool),
             DataType::Timestamp => format!("{}", val.value.time.value),
             DataType::TimestampTZ => format!("{}", val.value.time.value),
-            DataType::VarChar | DataType::Char | DataType::Text => {
+            DataType::VarChar | DataType::Char => {
                 let string_slice = core::str::from_utf8(&val.value.string).unwrap_or("");
                 string_slice.trim_end_matches(char::from(0)).to_string()
+            }
+            DataType::Text => {
+                let bytes = val.value.text_storage.extract_bytes();
+                String::from_utf8_lossy(bytes).to_string()
             }
             DataType::Interval => {
                 format!("{}", val.value.interval.value)

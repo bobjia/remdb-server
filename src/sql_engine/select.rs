@@ -38,10 +38,14 @@ fn format_typed_value(value: &remdb::types::TypedValue) -> String {
             DataType::Bool => value.value.bool.to_string(),
             DataType::Timestamp | DataType::TimestampTZ => value.value.time.value.to_string(),
             DataType::Interval => value.value.interval.value.to_string(),
-            DataType::VarChar | DataType::Char | DataType::Text => {
+            DataType::VarChar | DataType::Char => {
                 let bytes = &value.value.string;
                 let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
                 String::from_utf8_lossy(&bytes[..end]).to_string()
+            }
+            DataType::Text => {
+                let bytes = value.value.text_storage.extract_bytes();
+                String::from_utf8_lossy(bytes).to_string()
             }
             DataType::Vector => {
                 let vec_ptr = value.value.vector;
