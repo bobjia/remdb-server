@@ -38,7 +38,14 @@
       "Bash(python -m pytest tests/unit/ -q)",
       "Bash(python -m pytest tests/unit/test_indexes.py -v --tb=short)",
       "Bash(cargo test *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(chmod +x *)",
+      "Bash(./packaging/build-tarball.sh *)",
+      "Bash(./packaging/build-deb.sh *)",
+      "Bash(dpkg-deb *)",
+      "Bash(cargo check *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

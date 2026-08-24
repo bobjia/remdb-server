@@ -14,7 +14,7 @@ Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
 
 # 启动命令
-ExecStart=/usr/local/bin/remdb-server --config /etc/remdb/remdb-master.toml
+ExecStart=/usr/bin/remdb-server --config /etc/remdb/remdb-master.toml
 ExecReload=/bin/kill -HUP $MAINPID
 
 # 工作目录

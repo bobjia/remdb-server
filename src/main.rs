@@ -37,7 +37,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    let message = "remdb-server v0.3.0";
+    let message = "remdb-server v0.3.2";
     info!("{}", message);
 
     // 处理子命令
