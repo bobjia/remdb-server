@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use warp::Filter;
 
+use remdb::model::embedding::EmbeddingEngine;
 use remdb::RemDb;
 
 use crate::milvus::auth;
@@ -12,6 +13,7 @@ pub struct MilvusServer {
     db: Arc<Mutex<&'static mut RemDb>>,
     port: u16,
     api_key: Option<String>,
+    embedding_engine: Option<Arc<EmbeddingEngine>>,
 }
 
 impl MilvusServer {
@@ -19,8 +21,9 @@ impl MilvusServer {
         db: Arc<Mutex<&'static mut RemDb>>,
         port: u16,
         api_key: Option<String>,
+        embedding_engine: Option<Arc<EmbeddingEngine>>,
     ) -> Self {
-        MilvusServer { db, port, api_key }
+        MilvusServer { db, port, api_key, embedding_engine }
     }
 
     pub async fn start(&self) {
@@ -167,6 +170,20 @@ impl MilvusServer {
                 handler::handle_drop_index(catalog, body).await
             });
 
+        // ── Embedding route ──
+        let embedding_engine = self.embedding_engine.clone();
+        let embedding_route = warp::path!("v2" / "vectordb" / "embedding")
+            .and(warp::post())
+            .and(auth.clone())
+            .and(warp::any().map(move || embedding_engine.clone()))
+            .and(warp::body::json())
+            .and_then(|engine: Option<Arc<EmbeddingEngine>>, body| async move {
+                match engine {
+                    Some(engine) => crate::milvus::embedding::handle_embedding(engine, body).await,
+                    None => Err(warp::reject::not_found()),
+                }
+            });
+
         // Combine all routes
         let routes = create_collection
             .or(drop_collection)
@@ -181,6 +198,7 @@ impl MilvusServer {
             .or(search)
             .or(create_index)
             .or(drop_index)
+            .or(embedding_route)
             .with(warp::cors().allow_any_origin())
             .recover(handler::handle_rejection);
 
