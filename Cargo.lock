@@ -1751,9 +1751,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "remdb"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9ebffc81ee142ee19017674d65b697c726675fe434e7914bceece02d364f4c1"
+version = "0.4.0"
 dependencies = [
  "cc",
  "lazy_static",
@@ -1769,8 +1767,6 @@ dependencies = [
 [[package]]
 name = "remdb-macros"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300a6f7fd4d0d5524888be6962da387ef95925461106f33cf8f0110a6e779cc2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1779,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "remdb-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ahash",
  "anyhow",

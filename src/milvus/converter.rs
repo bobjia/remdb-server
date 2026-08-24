@@ -14,6 +14,7 @@ pub fn milvus_type_to_remdb(type_str: &str) -> Result<DataType> {
         "Double" => Ok(DataType::Float64),
         "Bool" => Ok(DataType::Bool),
         "VarChar" | "Varchar" => Ok(DataType::VarChar),
+        "Text" => Ok(DataType::Text),
         "FloatVector" => Ok(DataType::Vector),
         "BinaryVector" => Ok(DataType::Vector),
         "JSON" => Ok(DataType::Json),

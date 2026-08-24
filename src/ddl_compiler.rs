@@ -325,13 +325,32 @@ fn parse_column_def(line: &str) -> std::result::Result<DdlColumn, DdlError> {
                     bool: lower == "true" || lower == "1",
                 })
             }
-            DataType::VarChar | DataType::Char | DataType::Text => {
+            DataType::VarChar | DataType::Char => {
                 // 移除引号
                 let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
                 let mut buf = [0; remdb::types::MAX_STRING_LEN];
                 let len = core::cmp::min(str_val.len(), remdb::types::MAX_STRING_LEN);
                 buf[..len].copy_from_slice(str_val.as_bytes());
                 Some(Value { string: buf })
+            }
+            DataType::Text => {
+                // 移除引号
+                let str_val = default_str.trim_matches(|c| c == '\'' || c == '"');
+                let bytes = str_val.as_bytes();
+                if bytes.len() <= 256 {
+                    // 内联存储（≤256字节）
+                    let mut buf = [0u8; 256];
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    Some(Value {
+                        text_storage: remdb::types::TextStorage::new_inline(buf),
+                    })
+                } else {
+                    // 对于超过256字节的默认值，使用Null作为回退
+                    // 实际运行中可通过INSERT/UPDATE写入更大的文本
+                    Some(Value {
+                        text_storage: remdb::types::TextStorage::new_null(),
+                    })
+                }
             }
             DataType::Timestamp | DataType::TimestampTZ => {
                 // 处理时间戳默认值
@@ -429,17 +448,21 @@ fn parse_data_type(typ: &str) -> std::result::Result<(DataType, usize), DdlError
 
     // 处理字符串类型
     if typ_lower.starts_with("text") {
-        // 检查是否有括号（如TEXT(255)）
-        if let Some(left_paren) = typ_lower.find('(') {
+        // TEXT类型使用TextStorage，支持最大10240字节
+        // 可选的括号内大小用于兼容性，但实际存储由TextStorage动态管理
+        let size = if let Some(left_paren) = typ_lower.find('(') {
             if let Some(right_paren) = typ_lower[left_paren..].find(')') {
                 let size_str = &typ_lower[left_paren + 1..left_paren + right_paren];
-                let size = size_str.parse::<usize>().map_err(|_| {
+                size_str.parse::<usize>().map_err(|_| {
                     DdlError::Parsing(format!("Invalid size for TEXT type: {}", typ))
-                })?;
-                return Ok((DataType::VarChar, size));
+                })?
+            } else {
+                remdb::types::DEFAULT_TEXT_SIZE
             }
-        }
-        return Ok((DataType::VarChar, 255)); // 默认大小为255字节
+        } else {
+            remdb::types::DEFAULT_TEXT_SIZE
+        };
+        return Ok((DataType::Text, size));
     }
     if typ_lower.starts_with("varchar") {
         // 查找括号
