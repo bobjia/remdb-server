@@ -45,7 +45,9 @@
       "Bash(dpkg-deb *)",
       "Bash(cargo check *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git tag *)",
+      "Bash(git push *)"
     ]
   }
 }
