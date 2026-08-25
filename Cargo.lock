@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "remdb-server"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "anyhow",

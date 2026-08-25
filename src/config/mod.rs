@@ -97,13 +97,17 @@ fn default_max_models() -> usize {
     5
 }
 
+fn default_auto_download() -> bool {
+    true
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct EmbeddingConfig {
     #[serde(default)]
     pub default_model: Option<String>,
     #[serde(default = "default_models_dir")]
     pub models_dir: String,
-    #[serde(default)]
+    #[serde(default = "default_auto_download")]
     pub auto_download: bool,
     #[serde(default = "default_max_models")]
     pub max_models: usize,
@@ -116,7 +120,7 @@ impl Default for EmbeddingConfig {
         Self {
             default_model: None,
             models_dir: default_models_dir(),
-            auto_download: false,
+            auto_download: default_auto_download(),
             max_models: default_max_models(),
             hf_mirror: None,
         }
