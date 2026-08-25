@@ -120,7 +120,7 @@ default_model = "bge-m3"
 # Directory where ONNX model files are stored
 models_dir = "./models"
 # Auto-download model from HuggingFace if not found locally
-auto_download = false
+auto_download = true
 # Maximum number of models to keep in memory cache
 max_models = 5
 # HuggingFace mirror URL (overrides HF_MIRROR env var)
