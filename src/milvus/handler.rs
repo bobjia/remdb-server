@@ -6,7 +6,7 @@ use remdb::types::DataType;
 use warp::Reply;
 
 use crate::milvus::catalog::MilvusCatalog;
-use crate::milvus::converter::{self, FilterExpr, parse_milvus_filter};
+use crate::milvus::converter::{FilterExpr, parse_milvus_filter};
 use crate::milvus::error::MilvusError;
 use crate::milvus::models::*;
 
@@ -517,9 +517,17 @@ pub async fn handle_create_index(
     catalog: Arc<MilvusCatalog>,
     body: CreateIndexRequest,
 ) -> Result<impl Reply, warp::Rejection> {
-    // Validate metric type
-    let _ = converter::milvus_metric_to_distance(&body.metric_type)
-        .map_err(|_| warp::reject::custom(MilvusError::InvalidMetricType(body.metric_type.clone())))?;
+    // Convert params to JSON value for catalog method
+    let params_json = body.params.as_ref().map(|p| serde_json::to_value(p).unwrap_or_default());
+
+    let _entry = catalog.create_index(
+        &body.collection_name,
+        &body.field_name,
+        &body.metric_type,
+        params_json.as_ref(),
+    ).await.map_err(|e| {
+        warp::reject::custom(e)
+    })?;
 
     let data = IndexInfo { index_name: body.index_name };
     let response = MilvusResponse::success(data);
@@ -530,7 +538,7 @@ pub async fn handle_drop_index(
     catalog: Arc<MilvusCatalog>,
     body: DropIndexRequest,
 ) -> Result<impl Reply, warp::Rejection> {
-    let _ = catalog.resolve_collection(&body.collection_name).await.map_err(|e| {
+    catalog.drop_index(&body.collection_name, &body.index_name).await.map_err(|e| {
         warp::reject::custom(e)
     })?;
     let resp = serde_json::json!({"code": 0, "message": "index dropped"});

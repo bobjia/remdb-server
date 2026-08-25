@@ -343,6 +343,125 @@ impl MilvusCatalog {
         self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Create an index on a collection field
+    pub async fn create_index(
+        &self,
+        collection_name: &str,
+        field_name: &str,
+        metric_type: &str,
+        params: Option<&serde_json::Value>,
+    ) -> Result<CatalogEntry, MilvusError> {
+        // Resolve the collection
+        let entry = self.resolve_collection(collection_name).await?;
+
+        // Validate the field exists and is a vector field
+        let schema: models::CollectionSchema = serde_json::from_str(&entry.schema_json)
+            .map_err(|_| MilvusError::InvalidSchema("cannot parse schema".to_string()))?;
+
+        let field = schema.fields.iter()
+            .find(|f| f.name == field_name)
+            .ok_or_else(|| MilvusError::InvalidFieldName(format!("field '{}' not found", field_name)))?;
+
+        if field.field_type != "FloatVector" && field.field_type != "BinaryVector" {
+            return Err(MilvusError::InvalidFieldName(
+                format!("field '{}' is not a vector field", field_name),
+            ));
+        }
+
+        // Validate metric type
+        let _ = converter::milvus_metric_to_distance(metric_type)
+            .map_err(|_| MilvusError::InvalidMetricType(metric_type.to_string()))?;
+
+        // Create the index in the remdb database
+        {
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
+
+            db.create_index(&entry.remdb_table_name, field_name, IndexType::Vector)
+                .map_err(|e| {
+                    MilvusError::InternalError(format!("create index: {:?}", e))
+                })?;
+        }
+
+        // Update the catalog entry
+        let index_type_str = params
+            .and_then(|p| p.get("index_type"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "HNSW".to_string());
+
+        let index_params_str = params
+            .map(|p| p.to_string())
+            .unwrap_or_default();
+
+        {
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
+
+            let sql = format!(
+                "UPDATE {} SET index_type = '{}', index_params = '{}' WHERE collection_id = {}",
+                CATALOG_TABLE,
+                escape_sql_string(&index_type_str),
+                escape_sql_string(&index_params_str),
+                entry.collection_id,
+            );
+            db.sql_query(&sql).map_err(|e| {
+                MilvusError::InternalError(format!("catalog update: {:?}", e))
+            })?;
+        }
+
+        // Update cache
+        let mut updated_entry = entry.clone();
+        updated_entry.index_type = index_type_str;
+        updated_entry.index_params = index_params_str;
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(collection_name.to_string(), updated_entry.clone());
+        }
+
+        Ok(updated_entry)
+    }
+
+    /// Drop an index on a collection field
+    pub async fn drop_index(
+        &self,
+        collection_name: &str,
+        _index_name: &str,
+    ) -> Result<(), MilvusError> {
+        // Resolve the collection
+        let entry = self.resolve_collection(collection_name).await?;
+
+        // For now, just clear the index type and params in the catalog
+        // (remdb doesn't support dropping individual indexes via API, but SQL does)
+        {
+            let mut db = self.db.lock().map_err(|_| {
+                MilvusError::InternalError("database lock poisoned".to_string())
+            })?;
+
+            let sql = format!(
+                "UPDATE {} SET index_type = '', index_params = '' WHERE collection_id = {}",
+                CATALOG_TABLE,
+                entry.collection_id,
+            );
+            db.sql_query(&sql).map_err(|e| {
+                MilvusError::InternalError(format!("catalog update: {:?}", e))
+            })?;
+        }
+
+        // Update cache
+        let mut updated_entry = entry.clone();
+        updated_entry.index_type = String::new();
+        updated_entry.index_params = String::new();
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(collection_name.to_string(), updated_entry);
+        }
+
+        Ok(())
+    }
+
     /// Refresh the in-memory cache from the catalog table
     async fn refresh_cache(&self) {
         let entries = {

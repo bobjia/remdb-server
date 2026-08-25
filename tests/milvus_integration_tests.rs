@@ -603,3 +603,202 @@ async fn test_init_db_only() {
         "shared test database should be initialized"
     );
 }
+
+// ============================================================================
+// Index creation tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_index_on_collection() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    // Create a collection with a vector field
+    let create_body = serde_json::json!({
+        "collectionName": "test_create_index",
+        "schema": {
+            "fields": [
+                {"name": "id", "type": "Int64", "isPrimary": true},
+                {"name": "vector", "type": "FloatVector", "params": {"dim": 4}},
+                {"name": "name", "type": "VarChar", "params": {"max_length": 64}}
+            ]
+        }
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/collections/create", Some(create_body)).await;
+    let (status, _json) = parse_response(resp).await;
+    assert_eq!(status, 200, "Failed to create collection");
+
+    // Create index on the vector field
+    let create_index_body = serde_json::json!({
+        "collectionName": "test_create_index",
+        "indexName": "idx_vector",
+        "fieldName": "vector",
+        "metricType": "L2",
+        "params": {
+            "nlist": 128,
+            "M": 16,
+            "efConstruction": 200,
+            "index_type": "HNSW"
+        }
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/create", Some(create_index_body)).await;
+    let (status, json) = parse_response(resp).await;
+    assert_eq!(status, 200, "Create index failed: {:?}", json);
+    assert_eq!(json["code"], 0, "Expected success code, got: {:?}", json);
+    assert_eq!(json["data"]["indexName"], "idx_vector");
+
+    // Clean up
+    let drop_body = serde_json::json!({"collectionName": "test_create_index"});
+    let _ = test_request(&routes, "POST", "/v2/vectordb/collections/drop", Some(drop_body)).await;
+}
+
+#[tokio::test]
+async fn test_create_index_invalid_metric_type() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    // Create a collection first
+    let create_body = serde_json::json!({
+        "collectionName": "test_invalid_metric",
+        "schema": {
+            "fields": [
+                {"name": "id", "type": "Int64", "isPrimary": true},
+                {"name": "vector", "type": "FloatVector", "params": {"dim": 4}}
+            ]
+        }
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/collections/create", Some(create_body)).await;
+    let (status, _json) = parse_response(resp).await;
+    assert_eq!(status, 200);
+
+    // Try to create index with invalid metric type
+    let create_index_body = serde_json::json!({
+        "collectionName": "test_invalid_metric",
+        "indexName": "bad_idx",
+        "fieldName": "vector",
+        "metricType": "INVALID_METRIC",
+        "params": {}
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/create", Some(create_index_body)).await;
+    let (_status, json) = parse_response(resp).await;
+    assert!(json["code"].as_i64().unwrap() != 0, "Expected error for invalid metric type");
+
+    // Clean up
+    let drop_body = serde_json::json!({"collectionName": "test_invalid_metric"});
+    let _ = test_request(&routes, "POST", "/v2/vectordb/collections/drop", Some(drop_body)).await;
+}
+
+#[tokio::test]
+async fn test_create_index_on_nonexistent_collection() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    let create_index_body = serde_json::json!({
+        "collectionName": "nonexistent_collection",
+        "indexName": "idx",
+        "fieldName": "vector",
+        "metricType": "L2",
+        "params": {}
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/create", Some(create_index_body)).await;
+    let (_status, json) = parse_response(resp).await;
+    assert!(json["code"].as_i64().unwrap() != 0, "Expected error for nonexistent collection");
+}
+
+#[tokio::test]
+async fn test_create_index_on_non_vector_field() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    // Create a collection with a vector field and a scalar field
+    let create_body = serde_json::json!({
+        "collectionName": "test_non_vector",
+        "schema": {
+            "fields": [
+                {"name": "id", "type": "Int64", "isPrimary": true},
+                {"name": "vector", "type": "FloatVector", "params": {"dim": 4}},
+                {"name": "name", "type": "VarChar", "params": {"max_length": 64}}
+            ]
+        }
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/collections/create", Some(create_body)).await;
+    let (status, _json) = parse_response(resp).await;
+    assert_eq!(status, 200);
+
+    // Try to create index on a non-vector field
+    let create_index_body = serde_json::json!({
+        "collectionName": "test_non_vector",
+        "indexName": "bad_idx",
+        "fieldName": "name",
+        "metricType": "L2",
+        "params": {}
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/create", Some(create_index_body)).await;
+    let (_status, json) = parse_response(resp).await;
+    assert!(json["code"].as_i64().unwrap() != 0, "Expected error for non-vector field");
+
+    // Clean up
+    let drop_body = serde_json::json!({"collectionName": "test_non_vector"});
+    let _ = test_request(&routes, "POST", "/v2/vectordb/collections/drop", Some(drop_body)).await;
+}
+
+#[tokio::test]
+async fn test_drop_index_works() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    // Create a collection
+    let create_body = serde_json::json!({
+        "collectionName": "test_drop_index",
+        "schema": {
+            "fields": [
+                {"name": "id", "type": "Int64", "isPrimary": true},
+                {"name": "vector", "type": "FloatVector", "params": {"dim": 4}},
+                {"name": "name", "type": "VarChar", "params": {"max_length": 64}}
+            ]
+        }
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/collections/create", Some(create_body)).await;
+    let (status, _json) = parse_response(resp).await;
+    assert_eq!(status, 200);
+
+    // Create index first
+    let create_index_body = serde_json::json!({
+        "collectionName": "test_drop_index",
+        "indexName": "idx_to_drop",
+        "fieldName": "vector",
+        "metricType": "L2",
+        "params": {"nlist": 128}
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/create", Some(create_index_body)).await;
+    let (status, _json) = parse_response(resp).await;
+    assert_eq!(status, 200);
+
+    // Drop index
+    let drop_index_body = serde_json::json!({
+        "collectionName": "test_drop_index",
+        "indexName": "idx_to_drop"
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/drop", Some(drop_index_body)).await;
+    let (status, json) = parse_response(resp).await;
+    assert_eq!(status, 200, "Drop index failed: {:?}", json);
+    assert_eq!(json["code"], 0, "Expected success code, got: {:?}", json);
+
+    // Clean up
+    let drop_body = serde_json::json!({"collectionName": "test_drop_index"});
+    let _ = test_request(&routes, "POST", "/v2/vectordb/collections/drop", Some(drop_body)).await;
+}
+
+#[tokio::test]
+async fn test_drop_index_on_nonexistent_collection() {
+    let catalog = get_catalog().await;
+    let routes = build_test_routes!(catalog);
+
+    let drop_index_body = serde_json::json!({
+        "collectionName": "nonexistent",
+        "indexName": "some_idx"
+    });
+    let resp = test_request(&routes, "POST", "/v2/vectordb/indexes/drop", Some(drop_index_body)).await;
+    let (_status, json) = parse_response(resp).await;
+    assert!(json["code"].as_i64().unwrap() != 0, "Expected error for nonexistent collection");
+}

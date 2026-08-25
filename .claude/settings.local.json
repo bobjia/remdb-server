@@ -47,7 +47,10 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git tag *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(python3 *)",
+      "Bash(curl *)",
+      "Bash(git write-tree *)"
     ]
   }
 }

@@ -13,3 +13,7 @@ slave-db/*
 remdb-python/*/__pycache__/*
 remdb-python/__pycache__/*
 *.pyc
+
+# Build artifacts
+packaging/*.deb
+packaging/*.tar.gz
