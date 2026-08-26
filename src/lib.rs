@@ -22,6 +22,7 @@ pub fn is_debug_mode() -> bool {
 #[macro_use]
 mod macros;
 
+pub mod benchmark;
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
