@@ -18,3 +18,4 @@ remdb-python/__pycache__/*
 packaging/*.deb
 packaging/*.tar.gz
 vector_ops_benchmark_report.md
+models/*
