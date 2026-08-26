@@ -118,7 +118,7 @@ port = 19530
 # Default model used when request omits "model" field
 default_model = "bge-m3"
 # Directory where ONNX model files are stored
-models_dir = "./models"
+models_dir = "/mnt/home/bobjia/remdb-server/models"
 # Auto-download model from HuggingFace if not found locally
 auto_download = true
 # Maximum number of models to keep in memory cache

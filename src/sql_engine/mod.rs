@@ -119,32 +119,41 @@ pub fn execute_extended_sql(db: &mut remdb::RemDb, sql: &str) -> SqlResult<Resul
     Ok(total_result)
 }
 
+/// Preprocess SQL to handle known incompatibilities with the remdb crate's SQL parser.
+/// Currently a pass-through; specific transformations can be added as needed.
+fn preprocess_sql(sql: &str, _query_type: QueryType) -> String {
+    sql.to_string()
+}
+
 fn execute_single(db: &mut remdb::RemDb, sql: &str) -> SqlResult<ResultSet> {
     let query_type = SqlParser::detect_query_type(sql)?;
+
+    // Preprocess SQL to handle known incompatibilities with the remdb crate's SQL parser
+    let sql = preprocess_sql(sql, query_type);
 
     match query_type {
         QueryType::Select
         | QueryType::ShowTables
         | QueryType::Describe
-        | QueryType::HealthCheck => SelectExecutor::execute(db, sql),
+        | QueryType::HealthCheck => SelectExecutor::execute(db, &sql),
         QueryType::Databases => execute_databases_query(db),
-        QueryType::Insert => InsertExecutor::execute(db, sql),
-        QueryType::Update => UpdateExecutor::execute(db, sql),
-        QueryType::Delete => DeleteExecutor::execute(db, sql),
-        QueryType::CreateTable => DdlExecutorHandler::execute_create_table(db, sql),
-        QueryType::DropTable => DdlExecutorHandler::execute_drop_table(db, sql),
-        QueryType::AlterTable => DdlExecutorHandler::execute_alter_table(db, sql),
-        QueryType::CreateIndex => DdlExecutorHandler::execute_create_index(db, sql),
-        QueryType::DropIndex => DdlExecutorHandler::execute_drop_index(db, sql),
+        QueryType::Insert => InsertExecutor::execute(db, &sql),
+        QueryType::Update => UpdateExecutor::execute(db, &sql),
+        QueryType::Delete => DeleteExecutor::execute(db, &sql),
+        QueryType::CreateTable => DdlExecutorHandler::execute_create_table(db, &sql),
+        QueryType::DropTable => DdlExecutorHandler::execute_drop_table(db, &sql),
+        QueryType::AlterTable => DdlExecutorHandler::execute_alter_table(db, &sql),
+        QueryType::CreateIndex => DdlExecutorHandler::execute_create_index(db, &sql),
+        QueryType::DropIndex => DdlExecutorHandler::execute_drop_index(db, &sql),
         QueryType::Begin | QueryType::Commit | QueryType::Rollback => {
-            db.sql_query(sql)?;
+            db.sql_query(&sql)?;
             Ok(ResultSet::new())
         }
         QueryType::CreateDatabase
         | QueryType::DropDatabase
         | QueryType::UseDatabase
         | QueryType::CloseDatabase => {
-            db.sql_query(sql)?;
+            db.sql_query(&sql)?;
             Ok(ResultSet::new())
         }
         QueryType::Explain | QueryType::Export => Ok(ResultSet::new()),

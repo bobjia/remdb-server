@@ -361,7 +361,12 @@ pub async fn handle_delete(
     let sql = format!("DELETE FROM {} {}", entry.remdb_table_name, filter);
     let result = db_guard.sql_query(&sql)
         .map_err(|e| warp::reject::custom(MilvusError::InternalError(format!("{:?}", e))))?;
-    let delete_count = result.rows.len();
+    // The DELETE result set has one row with a single "affected_rows" column (u64).
+    // rows.len() is always 1, so we must read the actual value from the row.
+    let delete_count = result.rows.first()
+        .and_then(|row| row.values.first())
+        .map(|val| unsafe { val.value.u64 } as usize)
+        .unwrap_or(0);
     let data = DeleteResponseData { delete_count };
     let response = MilvusResponse::success(data);
     Ok(warp::reply::json(&response))
@@ -391,8 +396,25 @@ pub async fn handle_get(
         let mut entity = serde_json::Map::new();
         for (i, col) in result.columns.iter().enumerate() {
             if let Some(val) = row.values.get(i) {
-                let str_val = typed_value_to_string(val);
-                entity.insert(col.clone(), serde_json::Value::String(str_val));
+                if val.value_type == DataType::Vector {
+                    // Read actual vector data from the TypedValue's vector pointer
+                    let dim = entry.dimension as usize;
+                    let json_vec = if dim > 0 {
+                        let vec_slice = unsafe { core::slice::from_raw_parts(val.value.vector, dim) };
+                        vec_slice.iter()
+                            .map(|f| serde_json::Value::Number(
+                                serde_json::Number::from_f64(*f as f64)
+                                    .unwrap_or(serde_json::Number::from(0))
+                            ))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    entity.insert(col.clone(), serde_json::Value::Array(json_vec));
+                } else {
+                    let str_val = typed_value_to_string(val);
+                    entity.insert(col.clone(), serde_json::Value::String(str_val));
+                }
             }
         }
         let response = MilvusResponse::success(serde_json::Value::Object(entity));
@@ -442,8 +464,25 @@ pub async fn handle_query(
         let mut entity = serde_json::Map::new();
         for (i, col) in result.columns.iter().enumerate() {
             if let Some(val) = row.values.get(i) {
-                let str_val = typed_value_to_string(val);
-                entity.insert(col.clone(), serde_json::Value::String(str_val));
+                if val.value_type == DataType::Vector {
+                    // Read actual vector data from the TypedValue's vector pointer
+                    let dim = entry.dimension as usize;
+                    let json_vec = if dim > 0 {
+                        let vec_slice = unsafe { core::slice::from_raw_parts(val.value.vector, dim) };
+                        vec_slice.iter()
+                            .map(|f| serde_json::Value::Number(
+                                serde_json::Number::from_f64(*f as f64)
+                                    .unwrap_or(serde_json::Number::from(0))
+                            ))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    entity.insert(col.clone(), serde_json::Value::Array(json_vec));
+                } else {
+                    let str_val = typed_value_to_string(val);
+                    entity.insert(col.clone(), serde_json::Value::String(str_val));
+                }
             }
         }
         rows_json.push(serde_json::Value::Object(entity));
@@ -492,9 +531,31 @@ pub async fn handle_search(
                 for field_name in out_fields {
                     if let Some(field_idx) = table.def.fields.iter().position(|f| f.name == *field_name) {
                         let field = &table.def.fields[field_idx];
-                        let val = typed_value_from_record(&record_ref, field_idx, field.data_type);
-                        if let Some(v) = val {
-                            entity.insert(field_name.clone(), v);
+                        if field.data_type == DataType::Vector {
+                            // Read vector data directly from the record
+                            let record_ptr = unsafe { table.get_record_ptr(record_ref.id()) };
+                            if let Ok(val) = unsafe { table.get_field(record_ptr, field_idx) } {
+                                let dim = field.vector_metadata.as_ref()
+                                    .map(|m| m.dimension as usize)
+                                    .unwrap_or(0);
+                                let json_vec = if dim > 0 {
+                                    let vec_slice = unsafe { core::slice::from_raw_parts(val.vector, dim) };
+                                    vec_slice.iter()
+                                        .map(|f| serde_json::Value::Number(
+                                            serde_json::Number::from_f64(*f as f64)
+                                                .unwrap_or(serde_json::Number::from(0))
+                                        ))
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                entity.insert(field_name.clone(), serde_json::Value::Array(json_vec));
+                            }
+                        } else {
+                            let val = typed_value_from_record(&record_ref, field_idx, field.data_type);
+                            if let Some(v) = val {
+                                entity.insert(field_name.clone(), v);
+                            }
                         }
                     }
                 }
