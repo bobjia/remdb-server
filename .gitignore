@@ -16,4 +16,5 @@ remdb-python/__pycache__/*
 
 # Build artifacts
 packaging/*.deb
-packaging/*.tar.gzvector_ops_benchmark_report.md
+packaging/*.tar.gz
+vector_ops_benchmark_report.md

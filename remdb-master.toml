@@ -6,9 +6,13 @@ ddl = ""
 # 快照文件路径
 snapshot_dir = "./db/snapshot"
 # 快照类型：full（全量）或incremental（增量）
-snapshot_type = "incremental"
+# IMPORTANT: Use "full" periodically to create base snapshots for recovery!
+# Recommended strategy: alternate between full and incremental
+snapshot_type = "full"
 # 快照周期（秒）
 snapshot_interval = 60
+# 最大保留的增量快照数量（仅当snapshot_type=incremental时生效）
+max_incremental_snapshots = 10
 
 # 数据库总内存大小（字节），默认1GB，设置为100MB以避免内存分配错误
 total_memory = 104857600
